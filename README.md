@@ -15,20 +15,19 @@ skills (in the project you are in) at the same time.
 ## Install
 
 ```sh
-git clone https://github.com/henriquefps/skills-manager.git ~/orca/projects/skills-manager
-cd ~/orca/projects/skills-manager
+git clone https://github.com/henriquefps/skills-manager.git
+cd skills-manager
 node -v   # must be >= 20
 ```
 
 Pick one way to get the `skm` command in your terminal:
 
-**Alias in `~/.zshrc`** (installs nothing globally):
+**Alias in your shell config** (installs nothing globally). From inside the cloned folder:
 
 ```sh
-alias skm='node "$HOME/orca/projects/skills-manager/bin/skm.mjs"'
+echo "alias skm='node \"$PWD/bin/skm.mjs\"'" >> ~/.zshrc   # or ~/.bashrc
+source ~/.zshrc
 ```
-
-Then run `source ~/.zshrc`.
 
 **Or `npm link`** (puts a `skm` command on your PATH):
 
