@@ -76,7 +76,7 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - press **Check for updates** to see which tracked skills are outdated, and **Update** them one by one, with a diff of what will change;
 - see the **context cost** of every skill and the total for your active ones, and sort by it;
 - see **lint** findings per skill and filter by them;
-- open the **Projects** tab to browse the skills of all your projects;
+- open the **Projects** tab to browse your projects (what they are, their stack, tags and status) and their skills;
 - switch the **theme** (System, Light or Dark) with the toggle in the top right corner; your choice is remembered in the browser;
 - mark skills as **favorites**, add **tags**, filter by them, and copy several skills into the project at once.
 
@@ -107,7 +107,10 @@ skm fav <name...>         |   skm unfav <name...>   # favorites
 skm tag <name> <tag...>   |   skm untag <name> <tag...>   |   skm tags
 skm list --fav            |   skm list --tag <tag>   # filters (FAV and TAGS columns)
 skm pull <name...>        # copy one or more global skills (inactive ones too) into this project
-skm projects              [--json]   # scan the configured project folders
+skm projects              [--json] [--brief] [--all]   # scan the configured project folders
+skm projects find <words...>   [--json] [--brief]   # search projects by name, description, tags, stack
+skm projects show <name|path>  [--json]   # full sheet of one project
+skm projects set <name|path>   [--desc "..."] [--tags a,b] [--add-tag t] [--rm-tag t] [--status active|paused|archived] [--note "..."] [--clear desc|tags|notes|status]
 skm projects add <path>   |   skm projects rm <path>   |   skm projects depth <n>
 skm config                # show the config file path and content
 ```
@@ -201,6 +204,36 @@ global one into a project, and flags **repeated skills**: the same skill name in
 marked identical or diverged, and whether it already exists in global. That is the hint to promote it.
 
 ![skm: projects](docs/img/screenshot-projects.png)
+
+### A project index for your agents
+
+`skm projects` doubles as an index of everything you have built. Each project gets facts that skm
+computes on every scan (git remote without credentials, branch, last commit date, stack detected from
+files like `package.json` or `components.json`, and the first paragraph of the README), plus metadata
+you write yourself: a description, tags, a status (`active`, `paused` or `archived`) and notes. Your
+metadata is saved by project path in `~/.config/skm/config.json`, never inside the projects.
+
+```sh
+skm projects set my-sync-plugin --desc "Background sync plugin for OutSystems mobile apps" --tags work,outsystems
+skm projects find sync plugin          # every word must match; best match first
+skm projects show my-sync-plugin       # path, remote, branch, last commit, stack, notes, skills
+```
+
+You can edit the same fields from the **Projects** tab in the UI, which also searches them and hides
+archived projects until you ask for them.
+
+#### The `skm` skill
+
+The repo ships a skill for your agent in `skills/skm/SKILL.md`. It teaches the agent to resolve "that
+sync plugin I built" to a path with `skm projects find`, read the sheet, and save what you tell it
+about a project. Install it like any other skill:
+
+```sh
+npx skills add henriquefps/skills-manager
+```
+
+The agent has to be able to run `skm`, and **shell aliases are not visible to agents**. Make `skm` a
+real executable on your PATH, for example with `npm link` from the cloned folder.
 
 ## Recipes
 
