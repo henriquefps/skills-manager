@@ -205,7 +205,7 @@ h1 {
 }
 .toolbar.no-sort { grid-template-columns: auto 1fr; }
 .sort { display: flex; align-items: center; gap: 8px; }
-.sort[hidden], .chips[hidden] { display: none; }
+.sort[hidden], .chips[hidden], .chips:empty { display: none; }
 .sort label { font-size: 13px; font-weight: 600; color: var(--muted-fg); white-space: nowrap; }
 select {
   height: 44px; padding: 0 12px; border-radius: 12px; font: inherit; font-size: 14px;
@@ -612,6 +612,54 @@ body.has-bar .toasts { bottom: 96px; }
 .results li.bad { border-color: var(--bad-border); background: var(--bad-soft); }
 .results .badge { flex: none; margin-top: 1px; }
 .results p { margin: 2px 0 0; font-size: 13.5px; color: var(--bad); }
+
+/* ---------- project index ---------- */
+
+.pdesc { margin: 0; }
+.pdesc.auto { color: var(--muted-fg); }
+.from-readme {
+  display: inline-block; margin-left: 8px; padding: 0 7px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; vertical-align: 1px; white-space: nowrap;
+}
+.pchips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ptag {
+  min-height: 24px; padding: 2px 10px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600;
+  background: var(--accent-soft); border: 1px solid var(--accent-soft-border); color: var(--fg);
+}
+.ptag:hover { border-color: var(--accent); }
+.ptag[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.stackchip {
+  display: inline-flex; align-items: center; min-height: 20px; padding: 0 8px; border-radius: 6px;
+  font: 500 11.5px ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted-fg);
+  background: var(--sunken); border: 1px solid var(--border);
+}
+.pfacts { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--muted-fg); }
+.pfact { min-width: 0; overflow-wrap: anywhere; }
+.pfact b { color: var(--fg); font-weight: 600; }
+.pfact.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.card.project.archived { opacity: 0.8; }
+
+.pedit { gap: 20px; }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.field-head label, .field-label { font-size: 14px; font-weight: 700; }
+.field-hint { margin: 0; font-size: 13px; color: var(--muted-fg); }
+.count-note { font-size: 12.5px; color: var(--muted-fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.count-note.over { color: var(--bad); font-weight: 700; }
+.pedit textarea {
+  width: 100%; padding: 10px 12px; border-radius: 12px; font: inherit; font-size: 14px; line-height: 1.5; resize: vertical; min-height: 84px;
+  background: var(--card); color: var(--fg); border: 1px solid var(--border);
+}
+.pedit textarea:focus-visible { outline-offset: 0; border-color: var(--accent); }
+.pedit textarea[aria-invalid] { border-color: var(--bad); }
+.pedit select { width: 100%; }
+.tag-name.static { padding: 2px 4px 2px 10px; display: inline-flex; align-items: center; min-height: 24px; }
+.form-err {
+  margin: 0; padding: 10px 14px; border-radius: 12px; font-size: 13.5px; font-weight: 600;
+  color: var(--bad); background: var(--bad-soft); border: 1px solid var(--bad-border);
+}
+.form-err[hidden] { display: none; }
+.pedit .modal-actions { position: sticky; bottom: 0; padding: 12px 0 0; background: var(--card); }
 
 /* ---------- phone ---------- */
 

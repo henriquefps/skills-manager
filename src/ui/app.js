@@ -76,10 +76,19 @@
     tags: new Set(), // tag filter, AND semantics
     selecting: false, // multi-select mode (Global tab only)
     selected: new Set(), // skill names picked for the batch copy
+    ptags: new Set(), // project tag filter (Projects tab), AND semantics
+    showArchived: false, // Projects tab: archived projects are hidden until asked for
   };
 
   const TAG_RE = /^[a-z0-9-]{1,24}$/;
   const MAX_TAGS = 8;
+  const MAX_DESC = 300;
+  const MAX_NOTES = 2000;
+  const PROJECT_STATUS = {
+    active: { label: 'Active' },
+    paused: { label: 'Paused', tone: 'warn' },
+    archived: { label: 'Archived', tone: 'plain' },
+  };
 
   const SCOPES = ['global', 'local', 'projects'];
   const SEVERITY = { error: { label: 'error', one: 'error', many: 'errors', tone: 'bad' }, warn: { label: 'warn', one: 'warning', many: 'warnings', tone: 'warn' }, info: { label: 'info', one: 'note', many: 'notes', tone: 'info' } };
@@ -131,6 +140,18 @@
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '';
     return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function fmtAgo(iso) {
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return '';
+    const days = Math.floor((Date.now() - t) / 86400000);
+    const plural = (n, u) => `${n} ${u}${n === 1 ? '' : 's'} ago`;
+    if (days < 1) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 30) return plural(days, 'day');
+    if (days < 365) return plural(Math.floor(days / 30), 'month');
+    return plural(Math.floor(days / 365), 'year');
   }
 
   const fmtTok = (n) => Number(n || 0).toLocaleString('en-US');
@@ -346,7 +367,7 @@
     pc.hidden = !state.projects;
     pc.textContent = state.projects ? state.projects.projects.length : 0;
     const proj = state.scope === 'projects';
-    $('#chips').hidden = proj;
+    $('#chips').hidden = false;
     $('#sort-box').hidden = proj;
     $('#sort').value = state.sort;
     $('.toolbar').classList.toggle('no-sort', proj);
@@ -356,6 +377,10 @@
       tab.tabIndex = on ? 0 : -1;
     }
     $('#list').setAttribute('aria-labelledby', `tab-${state.scope}`);
+    $('#search').placeholder = proj ? 'Search projects' : 'Search skills';
+    $('label[for="search"]').textContent = proj
+      ? 'Search projects by name, tag, description, stack, notes, README or remote'
+      : 'Search skills by name, description or tag';
   }
 
   function chipDefs(skills) {
@@ -415,6 +440,8 @@
 
   function renderChips() {
     const box = $('#chips');
+    if (state.scope === 'projects') { renderProjectChips(box); return; }
+    box.setAttribute('aria-label', 'Filter by status');
     const defs = chipDefs(skillsOf(state.scope));
     const cur = defs.find((c) => c.id === state.filter);
     if (!cur || (state.filter === 'update' && !cur.n)) state.filter = 'all';
@@ -433,21 +460,25 @@
 
   function renderTagbar() {
     const box = $('#tagbar');
-    const tags = tagList();
-    for (const t of [...state.tags]) if (!tags.some((x) => x.tag === t)) state.tags.delete(t);
-    $('#tag-suggest').replaceChildren(...tags.map((t) => h('option', { value: t.tag })));
-    box.hidden = !state.data || state.scope === 'projects' || !tags.length;
+    const proj = state.scope === 'projects';
+    const tags = proj ? projectTagList() : tagList();
+    const sel = proj ? state.ptags : state.tags;
+    const pre = proj ? 'pt' : 'tf';
+    const noun = proj ? 'projects' : 'skills';
+    if (proj ? state.projects : state.data) for (const t of [...sel]) if (!tags.some((x) => x.tag === t)) sel.delete(t);
+    $('#tag-suggest').replaceChildren(...tagList().map((t) => h('option', { value: t.tag })));
+    box.hidden = !state.data || !tags.length;
     if (box.hidden) return;
     box.replaceChildren(...[
-      h('span', { class: 'tagbar-label', id: 'tagbar-label', text: 'Tags' }),
+      h('span', { class: 'tagbar-label', id: 'tagbar-label', text: proj ? 'Project tags' : 'Tags' }),
       ...tags.map((t) => h('button', {
-        class: 'chip tagchip', type: 'button', 'aria-pressed': String(state.tags.has(t.tag)), 'data-fk': `tf:${t.tag}`,
-        onclick: () => { if (state.tags.has(t.tag)) state.tags.delete(t.tag); else state.tags.add(t.tag); render(); },
+        class: 'chip tagchip', type: 'button', 'aria-pressed': String(sel.has(t.tag)), 'data-fk': `${pre}:${t.tag}`,
+        onclick: () => { if (sel.has(t.tag)) sel.delete(t.tag); else sel.add(t.tag); render(); },
       }, t.tag, ' ', h('span', { class: 'n', text: t.count }))),
-      state.tags.size
-        ? h('button', { class: 'btn small ghost', type: 'button', 'data-fk': 'tf-clear', text: 'Clear tags', onclick: () => { state.tags.clear(); render(); } })
+      sel.size
+        ? h('button', { class: 'btn small ghost', type: 'button', 'data-fk': `${pre}-clear`, text: 'Clear tags', onclick: () => { sel.clear(); render(); } })
         : null,
-      state.tags.size > 1 ? h('span', { class: 'meta', text: 'Showing skills that have all of these tags.' }) : null].filter(Boolean));
+      sel.size > 1 ? h('span', { class: 'meta', text: `Showing ${noun} that have all of these tags.` }) : null].filter(Boolean));
   }
 
   function renderSelectToggle() {
@@ -1154,17 +1185,17 @@
         rootForm(true)));
       return;
     }
-    const q = state.q.trim().toLowerCase();
-    const shown = pr.projects.filter((p) => !q || p.name.toLowerCase().includes(q) || p.skills.some((k) => k.name.toLowerCase().includes(q)));
+    const shown = visibleProjects();
+    const hidden = pr.projects.length - eligibleProjects().length;
     list.append(h('div', { class: 'pview' },
       rootsPanel(cfg),
       state.projectsLoading ? h('p', { class: 'meta', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), ' Scanning.') : null,
       h('section', { 'aria-label': 'Projects found' },
-        h('h2', { class: 'section-label', text: `Projects found (${pr.projects.length})` }),
+        h('h2', { class: 'section-label', text: `Projects found (${shown.length === pr.projects.length ? shown.length : `${shown.length} of ${pr.projects.length}`})` }),
         shown.length
           ? h('div', { class: 'pgrid' }, shown.map(projectCard))
           : h('div', { class: 'empty-state' }, h('h2', { text: pr.projects.length ? 'No matching projects' : 'No projects found' }),
-            h('p', { text: pr.projects.length ? 'Try a different search.' : `Nothing with skills was found within ${cfg.scanDepth} ${cfg.scanDepth === 1 ? 'level' : 'levels'} of your folders. Add another folder or increase the depth.` }))),
+            h('p', { text: pr.projects.length ? `Try a different search, or clear the tag filters${hidden ? ' and show archived projects' : ''}.` : `Nothing with skills was found within ${cfg.scanDepth} ${cfg.scanDepth === 1 ? 'level' : 'levels'} of your folders. Add another folder or increase the depth.` }))),
       repeatedPanel(pr)));
   }
 
@@ -1181,21 +1212,211 @@
       rootForm(false));
   }
 
+  // ---------- project index (meta, auto facts, search, edit) ----------
+
+  const pmetaOf = (p) => p.meta || { description: '', tags: [], status: '', notes: '' };
+  const pautoOf = (p) => p.auto || {};
+  const pstatusOf = (p) => pmetaOf(p).status || 'active';
+  const isArchived = (p) => pstatusOf(p) === 'archived';
+
+  /** Same matching as the contract: every whitespace-separated token must hit some field, case-insensitive. */
+  function projectMatches(p, q) {
+    const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return true;
+    const m = pmetaOf(p);
+    const a = pautoOf(p);
+    const hay = [p.name, ...m.tags, m.description, ...(a.stack || []), m.notes, a.readme, a.remote, p.root, ...p.skills.map((k) => k.name)]
+      .filter(Boolean).join('\n').toLowerCase();
+    return tokens.every((t) => hay.includes(t));
+  }
+
+  /** Projects that pass the status filter (archived hidden by default). */
+  const eligibleProjects = () => (state.projects ? state.projects.projects.filter((p) => state.showArchived || !isArchived(p)) : []);
+
+  function visibleProjects() {
+    return eligibleProjects()
+      .filter((p) => [...state.ptags].every((t) => pmetaOf(p).tags.includes(t)))
+      .filter((p) => projectMatches(p, state.q));
+  }
+
+  function projectTagList() {
+    const counts = new Map();
+    for (const p of eligibleProjects()) for (const t of pmetaOf(p).tags) counts.set(t, (counts.get(t) || 0) + 1);
+    return [...counts].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  }
+
+  function renderProjectChips(box) {
+    box.setAttribute('aria-label', 'Filter projects by status');
+    const n = state.projects ? state.projects.projects.filter(isArchived).length : 0;
+    box.replaceChildren(...(n || state.showArchived ? [h('button', {
+      class: 'chip', type: 'button', 'aria-pressed': String(state.showArchived), 'data-fk': 'chip:archived',
+      onclick: () => { state.showArchived = !state.showArchived; render(); },
+    }, 'Show archived ', h('span', { class: 'n', text: n }))] : []));
+  }
+
+  function projectDescription(p) {
+    const m = pmetaOf(p);
+    const readme = pautoOf(p).readme;
+    if (m.description) return h('p', { class: 'desc pdesc', text: m.description });
+    if (readme) return h('p', { class: 'desc pdesc auto' }, readme, h('span', { class: 'from-readme', text: 'from README' }));
+    return null;
+  }
+
+  function projectFacts(p) {
+    const a = pautoOf(p);
+    const items = [
+      a.remote ? h('span', { class: 'pfact mono', title: 'Git remote', text: a.remote }) : null,
+      a.branch ? h('span', { class: 'pfact', title: 'Current branch' }, 'Branch ', h('b', { text: a.branch })) : null,
+      a.lastCommitAt && fmtAgo(a.lastCommitAt)
+        ? h('span', { class: 'pfact' }, 'Last commit ', h('time', { datetime: a.lastCommitAt, title: new Date(a.lastCommitAt).toLocaleString(), text: fmtAgo(a.lastCommitAt) }))
+        : null].filter(Boolean);
+    return items.length ? h('div', { class: 'pfacts' }, items) : null;
+  }
+
   function projectCard(p) {
     const active = p.skills.filter((k) => k.active);
     const tokens = active.reduce((n, k) => n + (k.cost ? k.cost.listing : 0), 0);
     const maxCost = Math.max(1, ...p.skills.map((k) => (k.cost ? k.cost.listing : 0)));
-    return h('article', { class: 'card project', 'aria-labelledby': `pn-${p.root}` },
+    const m = pmetaOf(p);
+    const st = pstatusOf(p);
+    const stack = pautoOf(p).stack || [];
+    const chips = [
+      st !== 'active' ? h('span', { class: `badge ${PROJECT_STATUS[st].tone || 'plain'}`, text: PROJECT_STATUS[st].label }) : null,
+      ...m.tags.map((t) => h('button', {
+        class: 'ptag', type: 'button', 'aria-pressed': String(state.ptags.has(t)), title: `Filter projects by ${t}`, 'data-fk': `ptn:${p.root}:${t}`,
+        onclick: () => { if (state.ptags.has(t)) state.ptags.delete(t); else state.ptags.add(t); render(); },
+      }, t)),
+      ...stack.map((t) => h('span', { class: 'stackchip', title: 'Detected stack', text: t }))].filter(Boolean);
+    return h('article', { class: `card project${st === 'archived' ? ' archived' : ''}`, 'aria-labelledby': `pn-${p.root}` },
       h('div', { class: 'card-top' },
         h('div', { class: 'card-id' },
           h('h3', { class: 'name', id: `pn-${p.root}`, text: p.name }),
           h('span', { class: 'meta mono', title: p.root, text: shortPath(p.root) })),
         h('span', { class: 'meta', text: `${active.length}/${p.skills.length} active, ~${fmtTok(tokens)} tok` })),
+      projectDescription(p),
+      chips.length ? h('div', { class: 'pchips' }, chips) : null,
+      projectFacts(p),
       h('ul', { class: 'prows' }, p.skills.map((k) => projectSkillRow(p, k, maxCost))),
       h('div', { class: 'card-foot' },
         h('span', { class: 'meta', text: `${p.skills.length} ${p.skills.length === 1 ? 'skill' : 'skills'}` }),
         h('div', { class: 'actions' },
+          h('button', { class: 'btn small', type: 'button', 'data-fk': `pe:${p.root}`, 'aria-label': `Edit ${p.name}`, text: 'Edit', onclick: () => openProjectEditor(p) }),
           h('button', { class: 'btn small', type: 'button', text: 'Copy from global', onclick: () => copyFromGlobal(p) }))));
+  }
+
+  /** The edit drawer: description, tags, status and notes of one project. Saves with POST /api/project-meta. */
+  function openProjectEditor(p) {
+    const dlg = $('#drawer');
+    const m = pmetaOf(p);
+    const draft = { tags: [...m.tags] };
+    const id = (n) => `pe-${n}`;
+
+    const counter = (el, max, node) => {
+      const sync = () => {
+        const n = el.value.length;
+        node.textContent = `${n} / ${max}`;
+        node.classList.toggle('over', n > max);
+        el.toggleAttribute('aria-invalid', n > max);
+      };
+      el.addEventListener('input', sync);
+      sync();
+    };
+    const desc = h('textarea', { id: id('desc'), name: 'description', rows: '3', 'aria-describedby': `${id('desc')}-n`, placeholder: 'What is this project, in a sentence or two?' });
+    desc.value = m.description;
+    const descN = h('span', { class: 'count-note', id: `${id('desc')}-n` });
+    counter(desc, MAX_DESC, descN);
+    const notes = h('textarea', { id: id('notes'), name: 'notes', rows: '5', 'aria-describedby': `${id('notes')}-n`, placeholder: 'Anything an agent or you should know before working here.' });
+    notes.value = m.notes;
+    const notesN = h('span', { class: 'count-note', id: `${id('notes')}-n` });
+    counter(notes, MAX_NOTES, notesN);
+
+    const status = h('select', { id: id('status'), name: 'status' },
+      Object.entries(PROJECT_STATUS).map(([v, o]) => h('option', { value: v, text: o.label })));
+    status.value = pstatusOf(p);
+
+    // tags editor: same rules as the skill tags, edited locally and sent with Save
+    const tagList_ = h('div', { class: 'tags' });
+    const tagErr = h('p', { class: 'tag-err', id: id('tag-err'), role: 'alert', hidden: true });
+    const inUse = [...new Set(state.projects.projects.flatMap((x) => pmetaOf(x).tags))].sort();
+    const suggest = h('datalist', { id: id('suggest') }, inUse.map((t) => h('option', { value: t })));
+    const tagInput = h('input', {
+      type: 'text', class: 'tag-input', id: id('tag'), name: 'tag', list: suggest.id, placeholder: 'Add tag', autocomplete: 'off', spellcheck: 'false',
+      maxlength: '40', 'aria-label': `Add a tag to ${p.name}`, 'aria-describedby': tagErr.id,
+    });
+    const showTagErr = (msg) => { tagErr.textContent = msg || ''; tagErr.hidden = !msg; tagInput.toggleAttribute('aria-invalid', !!msg); };
+    const drawTags = () => tagList_.replaceChildren(
+      ...draft.tags.map((t) => h('span', { class: 'tag' },
+        h('span', { class: 'tag-name static', text: t }),
+        h('button', {
+          class: 'tag-x', type: 'button', 'aria-label': `Remove tag ${t}`, title: `Remove ${t}`,
+          onclick: () => { draft.tags = draft.tags.filter((x) => x !== t); showTagErr(''); drawTags(); tagInput.focus(); },
+        }, xIcon()))),
+      h('span', { class: 'tag-add' }, tagInput));
+    const addTag = () => {
+      const r = tagError(null, tagInput.value, draft.tags);
+      if (r.error) { showTagErr(r.error); return; }
+      draft.tags = [...draft.tags, r.tag].sort();
+      tagInput.value = '';
+      showTagErr('');
+      drawTags();
+      $(`#${id('tag')}`).focus();
+    };
+    tagInput.addEventListener('input', () => showTagErr(''));
+    tagInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } });
+    drawTags();
+
+    const formErr = h('p', { class: 'form-err', role: 'alert', hidden: true });
+    const saveBtn = h('button', { class: 'btn primary', type: 'submit', text: 'Save' });
+    const closeBtn = h('button', { class: 'btn small ghost', type: 'button', text: 'Close', onclick: () => dlg.close() });
+    const cancelBtn = h('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: () => dlg.close() });
+    const field = (label, forId, control, extra, hint) => h('div', { class: 'field' },
+      h('div', { class: 'field-head' }, h('label', { for: forId, text: label }), extra || null),
+      hint ? h('p', { class: 'field-hint', text: hint }) : null,
+      control);
+
+    const form = h('form', {
+      class: 'drawer-body pedit', novalidate: true,
+      onsubmit: async (e) => {
+        e.preventDefault();
+        formErr.hidden = true;
+        if (desc.value.length > MAX_DESC) { formErr.textContent = `The description is over ${MAX_DESC} characters.`; formErr.hidden = false; desc.focus(); return; }
+        if (notes.value.length > MAX_NOTES) { formErr.textContent = `The notes are over ${MAX_NOTES} characters.`; formErr.hidden = false; notes.focus(); return; }
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving';
+        try {
+          await api('/api/project-meta', { root: p.root, description: desc.value.trim(), notes: notes.value.trim(), status: status.value, tags: draft.tags });
+        } catch (er) {
+          formErr.textContent = er.message;
+          formErr.hidden = false;
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save';
+          formErr.scrollIntoView({ block: 'nearest' });
+          return;
+        }
+        dlg.close();
+        toast(`Saved ${p.name}.`);
+        await loadProjects();
+      },
+    },
+      field('Description', id('desc'), desc, descN, 'Shown on the card and used by agents to find this project. Without one, the README line is used.'),
+      h('div', { class: 'field' },
+        h('div', { class: 'field-head' }, h('span', { class: 'field-label', id: id('tags-l'), text: 'Tags' })),
+        h('p', { class: 'field-hint', text: `Up to ${MAX_TAGS}. Lowercase letters, digits and hyphens. Press Enter to add.` }),
+        h('div', { class: 'tagsblock', role: 'group', 'aria-labelledby': id('tags-l') }, tagList_, tagErr, suggest)),
+      field('Status', id('status'), status, null, 'Paused and archived projects are marked on the card. Archived ones are hidden unless you show them.'),
+      field('Notes', id('notes'), notes, notesN),
+      formErr,
+      h('div', { class: 'modal-actions' }, cancelBtn, saveBtn));
+
+    dlg.replaceChildren(h('div', { class: 'drawer-inner' },
+      h('div', { class: 'drawer-head' },
+        h('div', {}, h('div', { class: 'badges' }, h('span', { class: 'badge plain', text: 'Project' })),
+          h('h2', { id: 'drawer-title', text: `Edit ${p.name}` }),
+          h('p', { class: 'meta mono', text: p.root })),
+        closeBtn),
+      form));
+    if (!dlg.open) dlg.showModal();
+    desc.focus();
   }
 
   function projectSkillRow(p, k, maxCost) {
