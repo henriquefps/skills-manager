@@ -1,5 +1,6 @@
 // Tiny stand-in for src/server.mjs: serves src/ui and a fake in-memory /api/*.
-// Usage: node src/ui/mock/mock-server.mjs   (PORT=4748, MOCK_NO_PROJECT=1 for a project-less cwd)
+// Usage: node src/ui/mock/mock-server.mjs   (PORT=4748, MOCK_NO_PROJECT=1 for a project-less cwd,
+// MOCK_ROOTS=1 to start with scan roots configured)
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -22,6 +23,34 @@ function mk(scope, name, status, description, extra = {}) {
     locations: [], alsoIn: [], ...extra,
   };
 }
+
+// Same estimate as the contract: Math.ceil(chars / 4).
+const costOf = (s) => ({
+  listing: Math.ceil((s.name.length + (s.description || '').length) / 4),
+  full: s.files === 0 ? 0 : Math.ceil(s.bytes / 4),
+});
+const TRIGGER = /use when|use this|use for|use to|when |whenever|trigger|can use/i;
+const LINT_EXTRA = {
+  'capacitor-app-checklist': [
+    { rule: 'name-mismatch', severity: 'warn', message: 'Frontmatter name "capacitor-checklist" does not match the folder name "capacitor-app-checklist".' },
+    { rule: 'broken-reference', severity: 'warn', message: 'references/android.md is mentioned in SKILL.md but does not exist.' }],
+  'build-a-saas': [{ rule: 'skill-md-large', severity: 'info', message: 'SKILL.md has 812 lines (over 500). Consider moving detail into references/.' }],
+  'cordova-plugins': [{ rule: 'description-long', severity: 'warn', message: 'Description is 1180 characters (over 1024).' }],
+  'log-session': [{ rule: 'name-invalid', severity: 'warn', message: 'Name "Log_Session" should use lowercase letters, digits and hyphens only.' }],
+};
+function lintOf(s) {
+  const out = [];
+  if (s.files === 0) out.push({ rule: 'no-skill-md', severity: 'error', message: 'Folder has no SKILL.md.' });
+  else {
+    if (!s.description) out.push({ rule: 'missing-description', severity: 'error', message: 'Frontmatter has no description.' });
+    else {
+      if (s.description.length < 40) out.push({ rule: 'description-short', severity: 'warn', message: `Description is only ${s.description.length} characters. Say what it does and when to use it.` });
+      if (!TRIGGER.test(s.description)) out.push({ rule: 'no-trigger-hint', severity: 'info', message: 'Description never says when to use the skill (for example "Use when ...").' });
+    }
+  }
+  return [...out, ...(LINT_EXTRA[s.name] || [])];
+}
+const decorate = (s) => Object.assign(s, { cost: costOf(s), lint: lintOf(s) });
 
 let db = { global: [], local: [] };
 const remote = {}; // what the fake GitHub says about each tracked skill
@@ -62,7 +91,9 @@ function seed() {
   org('adr-logger', 'henriquefps/agent-skills', '2026-05-30T17:20:00.000Z', true);
   org('cordova-plugins', 'cordova-community/skills', '2026-04-11T11:00:00.000Z', false, 'removed-upstream');
   org('outsystems-ui-js', 'outsystems/agent-skills', '2026-08-02T10:15:00.000Z', false, 'unreachable', { error: 'GitHub rate limit exceeded (resets in 41 min)' });
+  [...g, ...l].forEach(decorate);
   db = { global: g, local: noProject ? [] : l };
+  seedProjects();
   link();
 }
 function link() {
@@ -71,13 +102,69 @@ function link() {
     for (const sk of db[s]) sk.alsoIn = db[other].some((o) => o.name === sk.name) ? [other] : [];
   }
 }
+// ---- projects and config (in memory) ----
+let config = { projectRoots: process.env.MOCK_ROOTS ? ['~/code', '~/Documents'] : [], scanDepth: 3 };
+const pdb = {}; // projectRoot -> Skill[] for every project but the current one (db.local)
+const sameFolder = new Set(['release-notes']); // names whose copies are identical across projects
+function seedProjects() {
+  const at = (root, name, status, description, extra = {}) => decorate(mk('local', name, status, description, {
+    locations: [loc('claude', `${root}/.claude/skills/${name}`)], ...extra }));
+  const L = '/Users/demo/code/ledger';
+  const P = '/Users/demo/code/pixel-site';
+  const N = '/Users/demo/Documents/notes-api';
+  pdb[L] = [
+    at(L, 'release-notes', 'ok', 'Draft release notes from merged pull requests. Use when cutting a release.'),
+    at(L, 'sql-style', 'ok', 'House style for SQL in the ledger schema. Use when writing or reviewing queries.', { bytes: 14600 }),
+    at(L, 'wrangler', 'ok', 'Cloudflare Workers CLI, ledger flavored.'),
+  ];
+  pdb[P] = [
+    at(P, 'release-notes', 'ok', 'Draft release notes from merged pull requests. Use when cutting a release.'),
+    at(P, 'design-tokens', 'ok', 'Pixel site design tokens and how to apply them. Use when styling components.', { active: false, locations: [loc('claude', `${P}/.claude/skills-inactive/design-tokens`)] }),
+    at(P, 'wrangler', 'ok', 'Cloudflare Workers CLI for the marketing site.'),
+  ];
+  pdb[N] = [
+    at(N, 'release-notes', 'ok', 'Draft release notes from merged pull requests. Use when cutting a release.'),
+    at(N, 'api-conventions', 'diverged', 'REST naming, pagination and error shape for notes-api. Use when adding an endpoint.', { issues: ['agents and claude copies differ'] }),
+    at(N, 'atlas-conventions', 'ok', 'Naming, folder layout and review rules for the Atlas monorepo.'),
+  ];
+}
+const catalog = () => [
+  { root: ROOT, name: 'atlas', list: db.local },
+  ...Object.entries(pdb).map(([root, list]) => ({ root, name: root.split('/').pop(), list })),
+];
+const expand = (p) => (p.startsWith('~') ? HOME + p.slice(1) : p);
+const inRoots = (root) => config.projectRoots.some((r) => root.startsWith(expand(r) + '/'));
+const visibleProjects = () => catalog().filter((p) => !noProject || p.root !== ROOT).filter((p) => inRoots(p.root));
+const localList = (root) => (!root || root === ROOT ? db.local : pdb[root]);
+function setLocalList(root, arr) { if (!root || root === ROOT) db.local = arr; else pdb[root] = arr; }
+
+function projectsPayload() {
+  const projects = visibleProjects().filter((p) => p.list.length).map((p) => ({
+    root: p.root, name: p.name,
+    skills: p.list.map((x) => ({ name: x.name, active: x.active, status: x.status, cost: x.cost })),
+  }));
+  const byName = new Map();
+  for (const p of projects) for (const k of p.skills) byName.set(k.name, [...(byName.get(k.name) || []), p.root]);
+  const repeated = [...byName].filter(([, roots]) => roots.length > 1).map(([name, roots]) => ({
+    name, projects: roots, inGlobal: db.global.some((g) => g.name === name), identical: sameFolder.has(name),
+  }));
+  return { roots: config.projectRoots.map(expand), projects, repeated };
+}
+
 seed();
 
-const find = (scope, name) => db[scope].find((s) => s.name === name);
+const find = (scope, name, root) => (scope === 'local' ? localList(root) : db[scope]).find((s) => s.name === name);
 const err = (code, error, status = 409) => ({ status, body: { ok: false, error, code } });
 
 function act(d, b) {
-  const s = find(b.scope, b.name);
+  let root = ROOT;
+  if (b.projectRoot) {
+    root = b.projectRoot;
+    const known = root === ROOT || (visibleProjects().some((p) => p.root === root));
+    if (!known) return err('bad-project', `${root} is not inside a configured scan root.`, 400);
+    if (b.scope !== 'local') return err('bad-scope', 'projectRoot only applies to local skills.', 400);
+  }
+  const s = find(b.scope, b.name, b.projectRoot);
   if (!s) return err('not-found', `No ${b.scope} skill named ${b.name}.`, 404);
   const g = b.scope === 'global';
   switch (b.action) {
@@ -128,17 +215,17 @@ function act(d, b) {
     }
     case 'copyToLocal': {
       if (!g) return err('bad-scope', 'Copy to local works on global skills only.', 400);
-      if (noProject) return err('no-project', 'No project detected for this folder.', 400);
-      const ex = find('local', s.name);
+      if (noProject && !b.projectRoot) return err('no-project', 'No project detected for this folder.', 400);
+      const ex = find('local', s.name, b.projectRoot);
       if (ex && !b.overwrite) return err('exists', `A local skill named ${s.name} already exists. Enable overwrite to replace it.`);
       const tgt = b.target === 'agents' ? 'agents' : 'claude';
-      const path = `${ROOT}/.${tgt}/skills/${s.name}`;
+      const path = `${root}/.${tgt}/skills/${s.name}`;
       if (!b.dryRun) {
-        db.local = db.local.filter((x) => x.name !== s.name);
-        db.local.push({ ...s, scope: 'local', status: 'ok', issues: [], locations: [loc(tgt, path)] });
+        setLocalList(b.projectRoot, localList(b.projectRoot).filter((x) => x.name !== s.name));
+        localList(b.projectRoot).push({ ...s, scope: 'local', status: 'ok', issues: [], locations: [loc(tgt, path)] });
         link();
       }
-      return { body: { ok: true, message: `Copied ${s.name} to ${path.replace(ROOT, '.')}.`, changes: [`copy ${s.locations[0].path} -> ${path}`] } };
+      return { body: { ok: true, message: `Copied ${s.name} to ${path.replace(root, '.')}.`, changes: [`copy ${s.locations[0].path} -> ${path}`] } };
     }
     case 'update': {
       if (!g) return err('bad-scope', 'Update works on global skills only.', 400);
@@ -159,12 +246,41 @@ function act(d, b) {
     case 'delete': {
       const changes = [`trash ${s.locations[0].path} -> ${HOME}/.Trash/${s.name}`];
       if (g) changes.push(`remove ${HOME}/.claude/skills/${s.name}`);
-      if (!b.dryRun) { db[b.scope] = db[b.scope].filter((x) => x !== s); link(); }
+      if (!b.dryRun) {
+        if (g) db.global = db.global.filter((x) => x !== s); else setLocalList(b.projectRoot, localList(b.projectRoot).filter((x) => x !== s));
+        link();
+      }
       return { body: { ok: true, message: `Moved ${s.scope}/${s.name} to the system Trash (${HOME}/.Trash/${s.name}).`, changes } };
     }
     default:
       return err('bad-action', `Unknown action ${b.action}.`, 400);
   }
+}
+
+// ---- /api/diff ----
+const H = (oldStart, oldLines, newStart, newLines, lines) => ({ oldStart, oldLines, newStart, newLines, lines });
+function diffFor(name) {
+  const f = [];
+  const count = (c) => f.reduce((n, x) => n + x.hunks.reduce((m, h) => m + h.lines.filter((l) => l[0] === c).length, 0), 0);
+  if (name === 'wrangler') {
+    f.push({ path: 'SKILL.md', status: 'modified', binary: false, hunks: [
+      H(3, 6, 3, 7, [' description: Cloudflare Workers CLI for deploying, developing and managing Workers,', '-KV, R2 and D1.', '+KV, R2, D1, Queues and Workflows.', ' ---', ' ', ' # Wrangler', ' ']),
+      H(41, 6, 42, 9, [' ## Deploying', ' ', '-Run `wrangler deploy` from the project root.', '+Run `wrangler deploy` from the project root. Use `--dry-run` first to see the bundle size.', '+', '+Secrets are never read from the config file; use `wrangler secret put`.', ' ', ' ## Local development', ' ']),
+    ] });
+    f.push({ path: 'references/queues.md', status: 'added', binary: false, hunks: [H(0, 0, 1, 5, ['+# Queues', '+', '+Create a queue with `wrangler queues create <name>`.', '+Bind it as a producer or consumer in the config.', '+Messages are delivered at least once.'])] });
+    f.push({ path: 'assets/diagram.png', status: 'added', binary: true, hunks: [] });
+    f.push({ path: 'references/legacy-kv.md', status: 'removed', binary: false, hunks: [H(1, 3, 0, 0, ['-# Legacy KV', '-', '-Use the v1 namespace commands.'])] });
+    return { name, from: '45cc198', to: '2dab137', stats: { added: 2, removed: 1, modified: 1, insertions: count('+'), deletions: count('-') }, files: f };
+  }
+  if (name === 'build-a-saas') {
+    f.push({ path: 'SKILL.md', status: 'modified', binary: false, hunks: [
+      H(18, 8, 18, 7, [' ## Phase 1: Plan', ' ', '-NOTE (mine): always start with the pricing page copy.', ' Write the product brief before any code.', ' ', ' ## Phase 2: Build', ' ']),
+      H(70, 5, 69, 6, [' ## Billing', ' ', '+Use Stripe Checkout for the first release; add the customer portal later.', ' Webhooks must be idempotent.', ' ']),
+    ] });
+    return { name, from: 'c01d00a', to: 'c0ffee3', stats: { added: 0, removed: 0, modified: 1, insertions: count('+'), deletions: count('-') }, files: f };
+  }
+  f.push({ path: 'SKILL.md', status: 'modified', binary: false, hunks: [H(5, 4, 5, 5, [' ## Usage', ' ', '-Run the workflow.', '+Run the workflow, then verify the result.', '+Report anything unexpected.'])] });
+  return { name, from: '1a2b3c4', to: '5d6e7f8', stats: { added: 0, removed: 0, modified: 1, insertions: count('+'), deletions: count('-') }, files: f };
 }
 
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
@@ -178,11 +294,44 @@ createServer(async (req, res) => {
   try {
     if (url.pathname === '/api/state') {
       await new Promise((r) => setTimeout(r, 80));
+      const tot = (list) => {
+        const on = list.filter((x) => x.active);
+        return { active: on.length, listingTokens: on.reduce((n, x) => n + x.cost.listing, 0) };
+      };
+      const totals = { global: tot(db.global), local: tot(db.local) };
+      totals.listingTokens = totals.global.listingTokens + totals.local.listingTokens;
       return send(res, 200, {
         cwd: noProject ? HOME : `${ROOT}/packages/web`,
         project: noProject ? null : { root: ROOT, name: 'atlas' },
-        global: db.global, local: db.local,
+        global: db.global, local: db.local, totals,
       });
+    }
+    if (url.pathname === '/api/diff') {
+      await new Promise((r) => setTimeout(r, Number(process.env.MOCK_DIFF_MS || 600)));
+      const s = find('global', url.searchParams.get('name'));
+      if (!s) return send(res, 404, { ok: false, error: 'Skill not found.', code: 'not-found' });
+      if (!s.origin) return send(res, 422, { ok: false, error: `${s.name} has no recorded source.`, code: 'not-tracked' });
+      const r = remote[s.name] || { status: 'up-to-date' };
+      if (r.status === 'removed-upstream') return send(res, 422, { ok: false, error: `${s.name} no longer exists in ${s.origin.source}.`, code: 'removed-upstream' });
+      if (r.status === 'unreachable' || process.env.MOCK_DIFF_FAIL) return send(res, 502, { ok: false, error: `Could not reach ${s.origin.source}.`, code: 'network' });
+      return send(res, 200, diffFor(s.name));
+    }
+    if (url.pathname === '/api/config') {
+      if (req.method === 'PUT') {
+        let raw = '';
+        for await (const c of req) raw += c;
+        const b = JSON.parse(raw || '{}');
+        if (!Array.isArray(b.projectRoots) || !b.projectRoots.every((r) => typeof r === 'string')) return send(res, 400, { ok: false, error: 'projectRoots must be an array of folder paths.', code: 'bad-config' });
+        const bad = b.projectRoots.find((r) => !/^(~|\/)/.test(r) || /missing|nope/.test(r));
+        if (bad) return send(res, 400, { ok: false, error: `${bad} is not an existing folder.`, code: 'bad-config' });
+        if (!Number.isInteger(b.scanDepth) || b.scanDepth < 1 || b.scanDepth > 6) return send(res, 400, { ok: false, error: 'scanDepth must be a whole number from 1 to 6.', code: 'bad-config' });
+        config = { projectRoots: [...new Set(b.projectRoots.map((r) => r.replace(/\/+$/, '')))], scanDepth: b.scanDepth };
+      }
+      return send(res, 200, config);
+    }
+    if (url.pathname === '/api/projects') {
+      await new Promise((r) => setTimeout(r, 400));
+      return send(res, 200, projectsPayload());
     }
     if (url.pathname === '/api/updates') {
       await new Promise((r) => setTimeout(r, Number(process.env.MOCK_CHECK_MS || 1200)));
