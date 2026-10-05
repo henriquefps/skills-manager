@@ -132,3 +132,73 @@ HFPS olive-neutral theme, Inter (the hfps.dev design system, `hfps-visuals` skil
 `shared.css`; tokens `--bg --card --fg --muted-fg --border
 --line --accent --accent-soft --accent-soft-border`, radius 16/20, eyebrow + title + deck +
 white card). Also support dark mode via `prefers-color-scheme` with the same olive hue (107).
+
+## Provenance, outdated check and update (global scope only)
+
+The `npx skills` CLI records where each global skill came from in `<home>/.agents/.skill-lock.json`:
+`{ "version": 3, "skills": { "<name>": { "source": "owner/repo", "sourceType": "github", "sourceUrl",
+"skillPath": "skills/<name>/SKILL.md", "skillFolderHash": "<git tree sha of the skill folder>",
+"installedAt", "updatedAt", "pluginName"? } }, "dismissed": {...}, "lastSelectedAgents": [...] }`.
+skm reads it (never requires it: a missing or invalid file means "no provenance") and writes it
+only on `update`, preserving every unknown field, the file's indentation and the other skills,
+atomically (temp file + rename).
+
+`skillFolderHash` is the git tree SHA of the skill folder. skm computes the same hash locally
+(git tree hashing in JS: `blob <n>\0`, `tree <n>\0` entries sorted with directories compared as
+`name/`, modes `100644`, `100755`, `40000`, `120000`; ignore `.git` and `.DS_Store`). Verified:
+it matches the lockfile on the real installed skills. Local hash != lock hash means the skill
+was **modified locally**.
+
+Remote check: one GitHub API call per distinct repo, `GET /repos/{owner}/{repo}/git/trees/{default_branch}?recursive=1`
+(default branch from `GET /repos/{owner}/{repo}`), then find the tree entry for the folder of
+`skillPath`. Auth is optional: `GITHUB_TOKEN`/`GH_TOKEN`, else `gh auth token` if `gh` exists,
+else anonymous. Only `sourceType: "github"` is checked. The check is manual (never on page load).
+Network and `git` access are injectable so tests never hit the network.
+
+Check status per skill: `up-to-date` (remote hash == lock hash), `update-available` (differs),
+`removed-upstream` (folder no longer exists in the repo, e.g. renamed), `unreachable` (network,
+rate limit, repo gone; carries `error`). Skills without a lock entry have `origin: null` and are
+never checked.
+
+Update: `git clone --depth 1 <sourceUrl>` into a temp dir (uses the user's git credentials), take
+the folder of `skillPath`, then: refuse with `code: "modified"` if the local copy is modified and
+`force` is not set; move the old real folder to the system Trash (same helper as delete); copy the
+new folder in place (an inactive skill stays inactive: update where the folder lives); set the
+lock entry's `skillFolderHash` (from the clone: `git rev-parse HEAD:<folder>`) and `updatedAt`;
+the `.claude` symlink is untouched. `removed-upstream` cannot be updated (`code: "removed-upstream"`).
+`dryRun` lists the changes and touches nothing.
+
+### API additions
+
+`Skill` gains `origin`:
+```json
+"origin": null
+```
+or
+```json
+"origin": { "source": "google-gemini/gemini-skills", "url": "https://github.com/google-gemini/gemini-skills.git",
+            "skillPath": "skills/gemini-interactions-api/SKILL.md", "installedAt": "2026-06-23T02:43:28.718Z",
+            "updatedAt": "2026-06-23T02:43:28.718Z", "modified": false }
+```
+(`origin` is only ever non-null for `scope: "global"`; `modified` is computed on every `/api/state`.)
+
+`GET /api/updates` (runs the remote check, can take seconds; always JSON) ->
+```json
+{ "checkedAt": "2026-10-05T20:00:00.000Z",
+  "results": { "gemini-interactions-api": { "status": "removed-upstream" },
+               "wrangler": { "status": "update-available", "remoteHash": "abc..." },
+               "orca-cli": { "status": "up-to-date" },
+               "foo": { "status": "unreachable", "error": "rate limited" } } }
+```
+`POST /api/action` accepts `{ "action": "update", "scope": "global", "name": "...", "force": false, "dryRun": false }`.
+Errors: `modified` (409-style 4xx), `removed-upstream`, `not-tracked`, `not-found`, `network`.
+
+### CLI additions
+
+```
+skm outdated [--json]            run the check; table: name, source, status (exit code 0 always)
+skm update <name> [--force] [--dry-run] [--yes]
+skm update --all [--force] [--dry-run] [--yes]    only update-available, skips modified unless --force
+```
+`skm list` shows an `ORIGIN` column (repo or `-`) and a `modified` marker; `skm doctor` unchanged.
+Confirmation (TTY, skipped by `--yes`/`--dry-run`) says the old version goes to the system Trash.
