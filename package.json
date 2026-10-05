@@ -5,6 +5,6 @@
   "type": "module",
   "bin": { "skm": "bin/skm.mjs" },
   "engines": { "node": ">=20" },
-  "scripts": { "test": "node --test test/" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
   "license": "MIT"
 }
