@@ -3,6 +3,7 @@ import path from 'node:path';
 import { readConfig } from './config.mjs';
 import { resolveContext, SkmError } from './context.mjs';
 import { dirHash } from './fsutil.mjs';
+import { compileIgnore, currentProjectExempt, readIgnore } from './ignore.mjs';
 import { GIT_CONCURRENCY, mapLimit, projectAuto } from './projectinfo.mjs';
 import { projectMetaFor, readProjectMeta, writeProjectMeta } from './projectmeta.mjs';
 import { scanScope } from './scan.mjs';
@@ -44,12 +45,14 @@ export function skillCost(skill) {
 const projectCtx = (ctx, root) => resolveContext({ ...ctx, resolved: false, cwd: root, projectRoot: root });
 
 /**
- * Projects (not symlinked dirs) below `root` up to `depth` levels; never descends into a found project. A folder is a
+ * Projects (not symlinked dirs) below `root` up to `depth` levels; never descends into a found project or an ignored
+ * folder (`ignore.prune(dir)` is true: not listed, not searched). A folder is a
  * project when it has a `.git` entry (dir or file), skills in `.agents/skills` or `.claude/skills`, or a marker file.
  */
-function findProjects(ctx, root, depth) {
+function findProjects(ctx, root, depth, ignore) {
   const found = [];
   const visit = (dir, level) => {
+    if (ignore.prune(dir)) return;
     if (dir !== ctx.home) {
       const pctx = projectCtx(ctx, dir);
       const skills = scanScope(pctx, 'local');
@@ -82,18 +85,28 @@ function skillDir(skill) {
 const skillEntry = (s) => ({ name: s.name, active: s.active, status: s.status, cost: skillCost(s), meta: s.meta });
 
 /**
- * Scan the configured roots. `config` overrides the stored one ({ projectRoots, scanDepth }). Every project carries its
+ * Scan the configured roots. `config` overrides the stored one ({ projectRoots, scanDepth }). Ignored folders are pruned and
+ * reported in `ignored` ({ entry, kind, matches }). Every project carries its
  * stored `meta` and its computed `auto` facts (git best effort, run with bounded concurrency).
  */
 export async function scanProjects(opts = {}, config) {
   const ctx = resolveContext(opts);
   const { projectRoots, scanDepth } = config ?? readConfig(ctx);
+  const matcher = compileIgnore(config?.ignore ?? readIgnore(ctx), ctx.home, currentProjectExempt(ctx));
+  const pruned = new Map(matcher.entries.map((e) => [e.entry, new Set()]));
+  const ignore = {
+    prune(dir) {
+      const entry = matcher.match(dir);
+      if (entry !== null) pruned.get(entry).add(dir);
+      return entry !== null;
+    },
+  };
   const seen = new Set();
   let projects = [];
   const metas = readProjectMeta(ctx);
   const dirs = new Map(); // project root -> name -> folder
   for (const r of projectRoots) {
-    for (const p of findProjects(ctx, r, scanDepth)) {
+    for (const p of findProjects(ctx, r, scanDepth, ignore)) {
       if (seen.has(p.root)) continue;
       seen.add(p.root);
       const map = new Map(p.skills.map((s) => [s.name, skillDir(s)]));
@@ -126,7 +139,8 @@ export async function scanProjects(opts = {}, config) {
     });
     repeated.push({ name, projects: roots, inGlobal: global.has(name), identical: hashes.every((h) => h && h === hashes[0]) });
   }
-  return { roots: projectRoots, projects, repeated };
+  const ignored = matcher.entries.map((e) => ({ entry: e.entry, kind: e.kind, matches: pruned.get(e.entry).size }));
+  return { roots: projectRoots, projects, repeated, ignored };
 }
 
 /**

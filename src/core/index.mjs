@@ -13,3 +13,4 @@ export { scanProjects, projectContext, describeProject, updateProjectMeta } from
 export { detectStack, mapLimit, normalizeRemote, projectAuto, readmeParagraph } from './projectinfo.mjs';
 export { projectMetaFor, readProjectMeta, writeProjectMeta, STATUSES } from './projectmeta.mjs';
 export { projectDescription, projectStatus, searchProjects } from './projectsearch.mjs';
+export { compileIgnore, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, updateIgnore, MAX_IGNORE } from './ignore.mjs';

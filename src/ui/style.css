@@ -433,6 +433,12 @@ dialog::backdrop { background: light-dark(oklch(0.15 0.01 107 / 0.45), oklch(0 0
 .roots { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .roots li { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--sunken); border: 1px solid var(--border); border-radius: 10px; padding: 4px 6px 4px 12px; }
 .roots code { font: 500 13px ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; min-width: 0; }
+.disclosure { background: none; border: 0; padding: 0; font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.hidden-body { display: flex; flex-direction: column; gap: 12px; }
+.ignore-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.ignore-entry code { font: 500 13px ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
+.form-error { margin: 0; color: var(--bad); font-size: 13px; min-height: 0; }
+.form-error:empty { display: none; }
 .rootform { display: flex; gap: 8px; width: 100%; max-width: 560px; }
 .empty-state .rootform { margin: 18px auto 0; text-align: left; }
 .rootform input {

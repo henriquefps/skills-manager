@@ -177,7 +177,7 @@ const json = (method, body) => ({ method, headers: { 'content-type': 'applicatio
 
 test('server: /api/config, /api/projects, projectRoot on /api/action', async () => {
   assert.deepEqual((await call('/api/config')).body, { projectRoots: [], scanDepth: 3 });
-  assert.deepEqual((await call('/api/projects')).body, { roots: [], projects: [], repeated: [] });
+  assert.deepEqual((await call('/api/projects')).body, { roots: [], projects: [], repeated: [], ignored: [] });
   const bad = await call('/api/config', json('PUT', { projectRoots: [path.join(ws, 'missing')] }));
   assert.equal(bad.status, 400);
   assert.equal(bad.body.code, 'invalid');

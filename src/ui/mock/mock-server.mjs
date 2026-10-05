@@ -1,7 +1,8 @@
 // Tiny stand-in for src/server.mjs: serves src/ui and a fake in-memory /api/*.
 // Usage: node src/ui/mock/mock-server.mjs   (PORT=4748, MOCK_NO_PROJECT=1 for a project-less cwd,
 // MOCK_ROOTS=1 to start with scan roots configured, MOCK_PM_FORBIDDEN=1 to make every
-// POST /api/project-meta answer with the `forbidden` error)
+// POST /api/project-meta answer with the `forbidden` error). Four ignore entries are seeded; they hide
+// five extra mock projects until removed (POST /api/project-ignore keeps the list in memory).
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -128,6 +129,12 @@ function seedProjects() {
   pdb['/Users/demo/code/scratch-git'] = []; // git only
   pdb['/Users/demo/Documents/cordova-shell'] = []; // marker only (config.xml)
   pdb['/Users/demo/Documents/dotnet-tools'] = []; // marker only (*.csproj)
+  // Hidden by the seeded ignore entries (see `ignore` below); they come back when the entry is removed.
+  pdb['/Users/demo/Documents/old-stuff/draft-one'] = [];
+  pdb['/Users/demo/Documents/old-stuff/draft-two'] = [at('/Users/demo/Documents/old-stuff/draft-two', 'sketch-helper', 'ok', 'Quick sketching helpers.')];
+  pdb['/Users/demo/code/site-backup'] = [];
+  pdb['/Users/demo/Documents/android/shop-app'] = [];
+  pdb['/Users/demo/Documents/android/chat-app'] = [];
   pdb[N] = [
     at(N, 'release-notes', 'ok', 'Draft release notes from merged pull requests. Use when cutting a release.'),
     at(N, 'api-conventions', 'diverged', 'REST naming, pagination and error shape for notes-api. Use when adding an endpoint.', { issues: ['agents and claude copies differ'] }),
@@ -204,7 +211,50 @@ const catalog = () => [
 ];
 const expand = (p) => (p.startsWith('~') ? HOME + p.slice(1) : p);
 const inRoots = (root) => config.projectRoots.some((r) => root.startsWith(expand(r) + '/'));
-const visibleProjects = () => catalog().filter((p) => !noProject || p.root !== ROOT).filter((p) => inRoots(p.root));
+// ---- ignore (stored as given; a slash makes it a path, otherwise a name glob) ----
+const IGNORE_SEED = ['~/Documents/old-stuff', '*-backup', 'android', 'node_cache'];
+let ignore = [...IGNORE_SEED];
+const globRe = (g) => new RegExp('^' + g.split('*').map((x) => x.replace(/[.+@ \\^$|?()[\]{}]/g, '\\$&')).join('.*') + '$');
+const hides = (entry, root) => {
+  const abs = root.split('/').filter(Boolean);
+  if (entry.includes('/')) { const e = expand(entry).replace(/\/+$/, ''); return root === e || root.startsWith(e + '/'); }
+  const re = globRe(entry);
+  return abs.slice(abs.indexOf('Users') + 2).some((seg) => re.test(seg)); // folders below ~
+};
+const hiddenBy = (root) => (root === ROOT ? undefined : ignore.find((e) => hides(e, root)));
+const visibleProjects = () => catalog().filter((p) => !noProject || p.root !== ROOT).filter((p) => inRoots(p.root) && !hiddenBy(p.root));
+function ignoredPayload() {
+  const inside = catalog().filter((p) => inRoots(p.root));
+  return ignore.map((entry) => ({ entry, kind: entry.includes('/') ? 'path' : 'glob', matches: inside.filter((p) => hiddenBy(p.root) === entry).length }));
+}
+function applyIgnore(b) {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return err('invalid', 'body must be an object.', 400);
+  const norm = (raw) => {
+    if (typeof raw !== 'string' || !raw.trim()) throw err('invalid', 'Entries must be non-empty text.', 400);
+    const e = raw.trim();
+    if (!e.includes('/')) {
+      if (!/^[A-Za-z0-9_.\-@+ *]+$/.test(e)) throw err('invalid', `A name pattern may only use letters, digits, spaces, . _ - @ + and *: ${e}`, 400);
+      if (!e.replace(/[*.]/g, '')) throw err('invalid', `A name pattern needs something besides * and dots: ${e}`, 400);
+      return e;
+    }
+    if (!/^(\/|~\/)/.test(e)) throw err('invalid', `A path must be absolute or start with ~/: ${e}`, 400);
+    const abs = expand(e).replace(/\/+$/, '');
+    if (abs === '' || abs === HOME) throw err('invalid', abs === HOME ? 'Refusing to hide the whole home folder.' : 'Refusing to hide the filesystem root.', 400);
+    return abs.startsWith(HOME + '/') ? '~' + abs.slice(HOME.length) : abs;
+  };
+  try {
+    for (const k of ['add', 'remove']) if (b[k] !== undefined && (!Array.isArray(b[k]) || b[k].length > 200)) throw err('invalid', `${k} must be a list of at most 200 entries.`, 400);
+    const add = (b.add || []).map(norm);
+    const remove = (b.remove || []).map(norm);
+    for (const e of add) if (e.includes('/') && !inRoots(expand(e) + '/x') && !config.projectRoots.map(expand).includes(expand(e))) throw err('forbidden', `${e} is not inside a configured project folder.`, 403);
+    ignore = ignore.filter((e) => !remove.includes(e));
+    for (const e of add) if (!ignore.includes(e)) ignore.push(e);
+    return { body: { ok: true, ignore: [...ignore] } };
+  } catch (e) {
+    if (e && e.body) return e;
+    throw e;
+  }
+}
 const localList = (root) => (!root || root === ROOT ? db.local : pdb[root]);
 function setLocalList(root, arr) { if (!root || root === ROOT) db.local = arr; else pdb[root] = arr; }
 
@@ -218,7 +268,7 @@ function projectsPayload() {
   const repeated = [...byName].filter(([, roots]) => roots.length > 1).map(([name, roots]) => ({
     name, projects: roots, inGlobal: db.global.some((g) => g.name === name), identical: sameFolder.has(name),
   }));
-  return { roots: config.projectRoots.map(expand), projects, repeated };
+  return { roots: config.projectRoots.map(expand), projects, repeated, ignored: ignoredPayload() };
 }
 
 seed();
@@ -477,9 +527,16 @@ createServer(async (req, res) => {
       // Test hook for the mock only: back to the seed data (used by screenshot runs).
       seed();
       resetProjectMeta();
+      ignore = [...IGNORE_SEED];
       for (const k of Object.keys(metaDb)) delete metaDb[k];
       Object.assign(metaDb, JSON.parse(metaSeed));
       return send(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/project-ignore' && req.method === 'POST') {
+      let raw = '';
+      for await (const c of req) raw += c;
+      const out = applyIgnore(JSON.parse(raw || '{}'));
+      return send(res, out.status || 200, out.body);
     }
     if (url.pathname === '/api/project-meta' && req.method === 'POST') {
       let raw = '';

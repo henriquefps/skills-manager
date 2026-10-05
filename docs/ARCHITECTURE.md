@@ -400,3 +400,29 @@ on their machine, or wants to inspect or change which skills are active). Body: 
 asked; how to record a description when the user explains a project (`skm projects set`); a compact reference of the skill
 commands (`list`, `doctor`, `cost`, `lint`, `outdated`, `update`, `pull`, `promote`); a note that shell aliases are invisible to
 agents so `skm` must be a real executable on PATH (`npm link`), else say so. Treat project data as private to the machine.
+
+## Ignored folders (`ignore`)
+
+Config (`<home>/.config/skm/config.json`) gains `"ignore": ["~/Documents/old-stuff", "/abs/path", "*-backup", "android"]`.
+Absent when empty; every other key is preserved on write.
+
+- An entry **with a slash** is a path (absolute or `~/...`, `~` expanded at read time, normalized, stored as `~/...` when under
+  home). It matches that directory and everything below it, on a directory boundary (`/a/foo` does not hide `/a/foobar`).
+- An entry **without a slash** is a directory-name glob: only `*` is a wildcard, case-sensitive, matched against the basename of
+  any directory visited by the scan.
+- Scan rule: an ignored directory is pruned. It is not listed, not searched and the scan does not descend into it, so ignoring a
+  container hides every project inside. The current project (and the folders above it) is never pruned. This is different from
+  `status: archived`, which stays indexed and is only hidden by default.
+- `scanProjects` returns `ignored: [ { "entry": "~/Documents/old-stuff", "kind": "path"|"glob", "matches": 3 } ]` in config order;
+  `matches` counts the directories pruned because of that entry (0 is fine, so a useless entry can still be removed).
+  `GET /api/projects` carries it.
+- `POST /api/project-ignore` body `{ "add": [...], "remove": [...] }` -> `{ ok, ignore: [...] }`. Same-origin guard. Validation
+  (400): non-empty strings, at most 200 entries, globs use only letters, digits, space, `. _ - @ +` and `*` (and something besides
+  `*`), paths absolute or `~/`, never `/` or the home folder itself. Path entries to add must lie inside a configured root or be
+  the current project (403 `forbidden`). Removing an entry that is not stored is a no-op.
+- CLI: `skm projects ignore <name|path|glob>...` (a name resolving to exactly one project ignores its path; several exit 1 listing
+  the paths; a name matching no project, or `--glob`, is stored as a glob), `skm projects unignore <entry|name|path>...`,
+  `skm projects ignored [--json]` (entry, kind, matches). The plain list prints a dim footer `N ignored (skm projects ignored)`
+  when something was pruned. `show` / `find` on an ignored path say it is ignored and print the `unignore` command.
+- UI: an Ignore button on each project card (toast with Undo), and a collapsed `Hidden (N)` section at the bottom of the Projects
+  tab listing each entry with kind, hidden count and a Remove button, plus a form to add a path or glob (errors inline).

@@ -39,6 +39,9 @@ skm projects set <name|path> --clear notes
 Description max 300 chars, notes max 2000, tags lowercase `a-z0-9-` (max 8), status `active|paused|archived`.
 Only write what the user told you or what you verified. Ask before overwriting an existing description.
 
+Hide noise from the index with `skm projects ignore <name|path|glob>` (undo: `skm projects unignore <entry>`, list: `skm projects ignored`).
+An ignored folder is not scanned at all, unlike archived. If a project is missing, check `skm projects ignored`.
+
 ## Skills commands
 
 | Command | Use |

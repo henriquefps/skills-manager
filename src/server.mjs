@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkUpdates, diffUpstream, getSkill, getState, projectContext, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, updateMeta, updateProjectMeta, writeConfig } from './core/index.mjs';
+import { checkUpdates, diffUpstream, getSkill, getState, projectContext, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from './core/index.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const MIME = {
@@ -107,6 +107,11 @@ export function createServer(opts = {}) {
       if (url.pathname === '/api/project-meta' && req.method === 'POST') {
         refuseCrossOrigin(req);
         return sendJson(res, 200, { ok: true, meta: updateProjectMeta(ctx, await readJson(req)) });
+      }
+      if (url.pathname === '/api/project-ignore' && req.method === 'POST') {
+        refuseCrossOrigin(req);
+        const { ignore } = updateIgnore(ctx, await readJson(req));
+        return sendJson(res, 200, { ok: true, ignore });
       }
       if (url.pathname === '/api/projects' && req.method === 'GET') {
         const scan = await scanProjects(ctx);

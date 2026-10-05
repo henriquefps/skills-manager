@@ -72,6 +72,9 @@
     projectsLoading: false,
     projectsError: null,
     rootDraft: '',
+    hiddenOpen: false, // Projects tab: the Hidden (ignored) section is collapsed until asked for
+    ignoreDraft: '',
+    ignoreError: '',
     favOnly: false,
     tags: new Set(), // tag filter, AND semantics
     selecting: false, // multi-select mode (Global tab only)
@@ -181,13 +184,14 @@
 
   // ---------- toasts ----------
 
-  function toast(message, kind = 'info') {
+  function toast(message, kind = 'info', action) {
     const box = $('#toasts');
     const t = h('div', { class: `toast ${kind}` },
       h('span', { text: message }),
+      action ? h('button', { type: 'button', text: action.label, onclick: () => { t.remove(); action.run(); } }) : null,
       h('button', { type: 'button', 'aria-label': 'Dismiss message', text: 'Close', onclick: () => t.remove() }));
     box.append(t);
-    setTimeout(() => t.remove(), kind === 'error' ? 9000 : 5000);
+    setTimeout(() => t.remove(), kind === 'error' ? 9000 : action ? 10000 : 5000);
   }
 
   // ---------- state loading ----------
@@ -1113,7 +1117,7 @@
       state.config = await api('/api/config');
       state.projects = state.config.projectRoots.length
         ? await api('/api/projects')
-        : { roots: [], projects: [], repeated: [] };
+        : { roots: [], projects: [], repeated: [], ignored: [] };
     } catch (e) {
       state.projectsError = e.message;
     } finally {
@@ -1151,6 +1155,71 @@
 
   async function setDepth(n) {
     if (await saveConfig({ ...state.config, scanDepth: n })) await loadProjects();
+  }
+
+  /** POST /api/project-ignore; resolves to the stored list, or null after showing the error (inline when `inline`). */
+  async function changeIgnore(body, inline) {
+    try {
+      const res = await api('/api/project-ignore', body);
+      state.ignoreError = '';
+      return res.ignore;
+    } catch (e) {
+      if (inline) state.ignoreError = e.message; else toast(e.message, 'error');
+      render();
+      return null;
+    }
+  }
+
+  async function ignoreProject(p) {
+    if (!(await changeIgnore({ add: [p.root] }))) return;
+    toast(`Hid ${p.name}.`, 'info', { label: 'Undo', run: () => unignoreEntry(p.root, `Brought ${p.name} back.`) });
+    await loadProjects();
+  }
+
+  async function unignoreEntry(entry, okMessage) {
+    if (!(await changeIgnore({ remove: [entry] }))) return;
+    if (okMessage) toast(okMessage);
+    await loadProjects();
+  }
+
+  async function addIgnore() {
+    const v = state.ignoreDraft.trim();
+    if (!v) { state.ignoreError = 'Type a folder path or a name pattern first.'; render(); return; }
+    if (await changeIgnore({ add: [v] }, true)) {
+      state.ignoreDraft = '';
+      await loadProjects();
+    }
+  }
+
+  function hiddenPanel(pr) {
+    const list = pr.ignored || [];
+    const input = h('input', {
+      type: 'text', id: 'ignore-input', name: 'ignore', placeholder: '~/old-stuff or *-backup', autocomplete: 'off', spellcheck: 'false',
+      value: state.ignoreDraft, 'data-fk': 'ignore-input', 'aria-describedby': 'ignore-help ignore-error',
+      'aria-invalid': state.ignoreError ? 'true' : null,
+      oninput: (e) => { state.ignoreDraft = e.target.value; },
+    });
+    return h('section', { class: 'panel', 'aria-label': 'Hidden projects' },
+      h('div', { class: 'panel-head' },
+        h('h2', { class: 'section-label' },
+          h('button', { class: 'disclosure', type: 'button', 'aria-expanded': String(state.hiddenOpen), 'aria-controls': 'hidden-body', 'data-fk': 'hidden-toggle',
+            text: `${state.hiddenOpen ? '▾' : '▸'} Hidden (${list.length})`,
+            onclick: () => { state.hiddenOpen = !state.hiddenOpen; render(); } }))),
+      state.hiddenOpen ? h('div', { id: 'hidden-body', class: 'hidden-body' },
+        h('p', { class: 'meta', id: 'ignore-help', text: 'A hidden folder is not listed or searched, and neither is anything inside it. A path hides that folder and everything below it; a name pattern (only * is a wildcard) hides every folder with a matching name.' }),
+        list.length
+          ? h('ul', { class: 'roots' }, list.map((i) => h('li', {},
+            h('span', { class: 'ignore-entry' },
+              h('code', { text: i.entry }),
+              h('span', { class: 'stackchip', text: i.kind === 'glob' ? 'name pattern' : 'path' }),
+              h('span', { class: 'meta', text: i.matches === 1 ? 'hides 1 folder' : `hides ${i.matches} folders` })),
+            h('button', { class: 'btn small', type: 'button', 'aria-label': `Unhide ${i.entry}`, 'data-fk': `unhide:${i.entry}`, text: 'Remove', onclick: () => unignoreEntry(i.entry, `Unhid ${i.entry}.`) }))))
+          : h('p', { class: 'meta', text: 'Nothing is hidden.' }),
+        h('form', { class: 'rootform', onsubmit: (e) => { e.preventDefault(); addIgnore(); } },
+          h('label', { class: 'sr', for: 'ignore-input', text: 'Folder path or name pattern to hide' }),
+          input,
+          h('button', { class: 'btn', type: 'submit', 'data-fk': 'ignore-add', text: 'Hide' })),
+        h('p', { class: 'form-error', id: 'ignore-error', role: 'alert', text: state.ignoreError })) : null);
   }
 
   function rootForm(first) {
@@ -1197,7 +1266,8 @@
           ? h('div', { class: 'pgrid' }, shown.map(projectCard))
           : h('div', { class: 'empty-state' }, h('h2', { text: pr.projects.length ? 'No matching projects' : 'No projects found' }),
             h('p', { text: pr.projects.length ? `Try a different search, or clear the tag filters${hidden ? ' and show archived projects' : ''}.` : `No projects were found within ${cfg.scanDepth} ${cfg.scanDepth === 1 ? 'level' : 'levels'} of your folders. Add another folder or increase the depth.` }))),
-      repeatedPanel(pr)));
+      repeatedPanel(pr),
+      hiddenPanel(pr)));
   }
 
   function rootsPanel(cfg) {
@@ -1312,7 +1382,8 @@
         h('span', { class: 'meta', text: `${p.skills.length} ${p.skills.length === 1 ? 'skill' : 'skills'}` }),
         h('div', { class: 'actions' },
           h('button', { class: 'btn small', type: 'button', 'data-fk': `pe:${p.root}`, 'aria-label': `Edit ${p.name}`, text: 'Edit', onclick: () => openProjectEditor(p) }),
-          h('button', { class: 'btn small', type: 'button', text: 'Copy from global', onclick: () => copyFromGlobal(p) }))));
+          h('button', { class: 'btn small', type: 'button', text: 'Copy from global', onclick: () => copyFromGlobal(p) }),
+          h('button', { class: 'btn small', type: 'button', 'data-fk': `pi:${p.root}`, 'aria-label': `Ignore ${p.name}`, title: 'Hide this project from the index', text: 'Ignore', onclick: () => ignoreProject(p) }))));
   }
 
   /** The edit drawer: description, tags, status and notes of one project. Saves with POST /api/project-meta. */

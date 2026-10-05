@@ -16,7 +16,7 @@ export function expandHome(p, home) {
 }
 
 /** Inverse of expandHome for storage: paths inside home are written as `~/...`. */
-function collapseHome(abs, home) {
+export function collapseHome(abs, home) {
   const rel = path.relative(home, abs);
   if (rel === '') return '~';
   return rel.startsWith('..') || path.isAbsolute(rel) ? abs : `~/${rel.split(path.sep).join('/')}`;

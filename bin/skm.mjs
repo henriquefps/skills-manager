@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
-import { assertSkillsExist, checkUpdates, configPath, describeProject, diffUpstream, findProjectRoot, getState, normalizeAll, projectDescription, projectStatus, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, statLine, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
+import { assertSkillsExist, checkUpdates, configPath, describeProject, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, projectDescription, projectStatus, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -27,6 +27,8 @@ const USAGE = `skm: skills manager
   skm projects show <name|path> [--json]   full sheet of one project
   skm projects set <name|path> [--desc "..."] [--tags a,b] [--add-tag t] [--rm-tag t] [--status active|paused|archived]
                    [--note "..."] [--clear desc|tags|notes|status]   describe a project for agents
+  skm projects ignore <name|path|glob...>   hide folders from the scan (a glob like "*-backup" or "android" matches folder names)
+  skm projects unignore <entry|name|path...>   |   skm projects ignored [--json]   list entries and how many folders each hides
   skm projects add|rm <path>   |   skm projects depth <n>   |   skm config
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
@@ -218,6 +220,19 @@ function projectsTable(projects) {
   return table(rows);
 }
 
+const unignoreHint = (entry) => `skm projects unignore ${JSON.stringify(entry)}`;
+
+function throwIfIgnored(ctx, abs) {
+  const entry = ignoredBy(ctx, abs);
+  if (entry) throw new SkmError('ignored', `${abs} is ignored by "${entry}": run \`${unignoreHint(entry)}\` to bring it back`);
+}
+
+/** Dim footer of the plain list when the scan pruned something. */
+const ignoredFooter = (scan) => {
+  const n = scan.ignored.reduce((sum, i) => sum + i.matches, 0);
+  return n ? c.dim(`${n} ignored (skm projects ignored)`) : '';
+};
+
 /** `<name|path>` -> project entry: a unique exact name among the scanned projects, else a path to a project. */
 async function resolveProject(ctx, scan, arg) {
   if (!arg) throw new SkmError('invalid', 'usage: skm projects <show|set> <name|path>');
@@ -227,6 +242,7 @@ async function resolveProject(ctx, scan, arg) {
   const abs = path.resolve(ctx.cwd, arg === '~' || arg.startsWith('~/') ? path.join(ctx.home, arg.slice(1)) : arg);
   const known = scan.projects.find((p) => p.root === abs);
   if (known) return known;
+  throwIfIgnored(ctx, abs);
   let isDir = false;
   try {
     isDir = fs.statSync(abs).isDirectory();
@@ -234,7 +250,8 @@ async function resolveProject(ctx, scan, arg) {
   if (!isDir) {
     const loose = scan.projects.filter((p) => p.name.toLowerCase() === arg.toLowerCase());
     if (loose.length === 1) return loose[0];
-    throw new SkmError('not-found', `no project named or located at "${arg}"`);
+    const hidden = scan.ignored.reduce((n, i) => n + i.matches, 0);
+    throw new SkmError('not-found', `no project named or located at "${arg}"${hidden ? ` (${hidden} ignored folders are not scanned: skm projects ignored)` : ''}`);
   }
   return describeProject(ctx, findProjectRoot(abs, ctx.home) ?? abs);
 }
@@ -280,6 +297,57 @@ function metaRequest(flags) {
   return req;
 }
 
+/** `skm projects ignore`: a name resolving to one project ignores its path, a glob is stored as given, ambiguity exits 1. */
+function ignoreCommand(ctx, scan, args, flags) {
+  if (!args.length) throw new SkmError('invalid', 'usage: skm projects ignore <name|path|glob...>');
+  const add = [];
+  for (const arg of args) {
+    if (arg.includes('/') || arg.startsWith('~')) add.push(arg.startsWith('~') ? arg : path.resolve(ctx.cwd, arg));
+    else if (arg.includes('*') || flags.glob === true) add.push(arg);
+    else {
+      const byName = scan.projects.filter((p) => p.name === arg);
+      if (byName.length > 1) throw new SkmError('ambiguous', `"${arg}" matches ${byName.length} projects, pass one of these paths (or use --glob to hide every folder with that name):\n${byName.map((p) => `  ${p.root}`).join('\n')}`);
+      add.push(byName.length ? byName[0].root : arg);
+    }
+  }
+  const { ignore, added } = updateIgnore(ctx, { add });
+  if (flags.json) return console.log(JSON.stringify({ ok: true, ignore, added }, null, 2));
+  console.log(added.length ? `ignoring: ${added.join(', ')}` : 'already ignored');
+  if (added.length) console.log(c.dim(`undo with: ${unignoreHint(added[0])}`));
+}
+
+/** `skm projects unignore`: an entry as stored, a path that normalizes to one, or the folder name of a path entry. */
+function unignoreCommand(ctx, args, flags) {
+  if (!args.length) throw new SkmError('invalid', 'usage: skm projects unignore <entry|name|path...>');
+  const stored = readIgnore(ctx);
+  const remove = [];
+  for (const arg of args) {
+    if (stored.includes(arg)) {
+      remove.push(arg);
+      continue;
+    }
+    const as = arg.startsWith('~') ? arg : path.resolve(ctx.cwd, arg);
+    let norm = null;
+    try {
+      norm = normalizeIgnoreEntry(as, ctx.home);
+    } catch {}
+    if (norm && stored.includes(norm)) {
+      remove.push(norm);
+      continue;
+    }
+    const byName = stored.filter((e) => ignoreKind(e) === 'path' && path.basename(e) === arg);
+    if (byName.length === 1) remove.push(byName[0]);
+    else if (byName.length > 1) throw new SkmError('ambiguous', `"${arg}" matches ${byName.length} ignore entries, pass one of these:\n${byName.map((e) => `  ${e}`).join('\n')}`);
+    else {
+      const by = norm && ignoredBy(ctx, path.resolve(ctx.cwd, arg));
+      throw new SkmError('not-found', by ? `"${arg}" is hidden by "${by}": run \`${unignoreHint(by)}\`` : `no ignore entry matches "${arg}" (skm projects ignored)`);
+    }
+  }
+  const { ignore, removed } = updateIgnore(ctx, { remove });
+  if (flags.json) return console.log(JSON.stringify({ ok: true, ignore, removed }, null, 2));
+  console.log(`unignored: ${removed.join(', ')}`);
+}
+
 async function projectsCommand(opts, [sub, arg, ...more], flags) {
   const ctx = resolveContext(opts);
   const cfg = readConfig(ctx);
@@ -301,9 +369,16 @@ async function projectsCommand(opts, [sub, arg, ...more], flags) {
     if (!/^\d+$/.test(arg ?? '')) throw new SkmError('invalid', 'usage: skm projects depth <1-6>');
     return console.log(`scan depth: ${writeConfig(ctx, { scanDepth: Number(arg) }).scanDepth}`);
   }
-  if (sub && !['find', 'show', 'set'].includes(sub)) throw new SkmError('invalid', `unknown projects subcommand: ${sub}`);
+  if (sub === 'unignore') return unignoreCommand(ctx, [arg, ...more].filter((a) => a !== undefined), flags);
+  if (sub && !['find', 'show', 'set', 'ignore', 'ignored'].includes(sub)) throw new SkmError('invalid', `unknown projects subcommand: ${sub}`);
 
   const scan = await scanProjects(ctx);
+  if (sub === 'ignored') {
+    if (flags.json) return console.log(JSON.stringify(scan.ignored, null, 2));
+    if (!scan.ignored.length) return console.log('nothing ignored: add one with `skm projects ignore <name|path|glob>`');
+    return console.log(table([['ENTRY', 'KIND', 'HIDES'].map((h) => c.bold(h)), ...scan.ignored.map((i) => [i.entry, i.kind, String(i.matches)])]));
+  }
+  if (sub === 'ignore') return ignoreCommand(ctx, scan, [arg, ...more].filter((a) => a !== undefined), flags);
   if (sub === 'show' || sub === 'set') {
     const p = await resolveProject(ctx, scan, arg);
     if (sub === 'show') return flags.json ? console.log(JSON.stringify(p, null, 2)) : printSheet(p);
@@ -320,14 +395,23 @@ async function projectsCommand(opts, [sub, arg, ...more], flags) {
     if (!query.trim()) throw new SkmError('invalid', 'usage: skm projects find <query...>');
     projects = searchProjects(projects, query);
     if (flags.json) return console.log(JSON.stringify(flags.brief ? projects.map(brief) : projects, null, 2));
-    if (!projects.length) return console.log(`no projects match "${query}"`);
+    if (!projects.length) {
+      if (more.length === 0) throwIfIgnored(ctx, path.resolve(ctx.cwd, arg === '~' || arg.startsWith('~/') ? path.join(ctx.home, arg.slice(1)) : arg));
+      const footer = ignoredFooter(scan);
+      return console.log(`no projects match "${query}"${footer ? `\n${footer}` : ''}`);
+    }
     return console.log(projectsTable(projects));
   }
   if (flags.json) return console.log(JSON.stringify(flags.brief ? projects.map(brief) : { ...scan, projects }, null, 2));
   if (!scan.roots.length) return console.log('no project roots configured: add one with `skm projects add <path>`');
   console.log(c.dim(`roots: ${scan.roots.join(', ')} (depth ${cfg.scanDepth})`));
-  if (!projects.length) return console.log(scan.projects.length ? 'only archived projects found: use --all' : 'no projects found');
+  const footer = ignoredFooter(scan);
+  if (!projects.length) {
+    console.log(scan.projects.length ? 'only archived projects found: use --all' : 'no projects found');
+    return footer && console.log(footer);
+  }
   console.log(projectsTable(projects));
+  if (footer) console.log(footer);
   if (scan.repeated.length) {
     console.log(`\n${c.bold('Repeated skills')}`);
     for (const r of scan.repeated) {
