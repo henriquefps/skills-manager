@@ -80,6 +80,8 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - switch the **theme** (System, Light or Dark) with the toggle in the top right corner; your choice is remembered in the browser;
 - mark skills as **favorites**, add **tags**, filter by them, and copy several skills into the project at once.
 
+![skm in dark mode](docs/img/screenshot-dark.png)
+
 Options: `--port <n>` picks the port (if it is taken, the next free one is used) and
 `--no-open` skips opening the browser.
 
