@@ -49,3 +49,67 @@ test('cli delete --yes skips the prompt and trashes the folder', { skip: !suppor
   assert.ok(r.stdout.includes(trashed(home)));
   assert.ok(fs.existsSync(path.join(trashed(home), 'SKILL.md')));
 });
+
+// ---- provenance: list, outdated, update (offline: file:// source, no GitHub calls) ----
+
+import { execFileSync } from 'node:child_process';
+import { gitTreeHash, lockPath } from '../src/core/index.mjs';
+import { write } from './fixture.mjs';
+
+function updatableHome() {
+  const repo = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR ?? '/tmp'), 'skm-src-'));
+  const g = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo });
+  g('init', '-q', '-b', 'main');
+  write(path.join(repo, 'skills/good/SKILL.md'), '---\nname: good\ndescription: v2\n---\n');
+  g('add', '-A');
+  g('commit', '-q', '-m', 'v2');
+  const home = buildHome();
+  const hash = gitTreeHash(path.join(home, '.agents', 'skills', 'good'));
+  const entry = (extra) => ({ source: 'o/good', sourceType: 'github', sourceUrl: `file://${repo}`, skillPath: 'skills/good/SKILL.md', skillFolderHash: hash, installedAt: 'a', updatedAt: 'a', ...extra });
+  write(lockPath(home), JSON.stringify({ version: 3, skills: { good: entry(), unknown: entry() } }, null, 2));
+  return home;
+}
+
+test('cli list: ORIGIN column and modified marker', () => {
+  const home = updatableHome();
+  let r = skm(home, ['list']);
+  assert.match(r.stdout, /ORIGIN/);
+  assert.match(r.stdout, /good\s+active\s+ok\s+o\/good\s*$/m);
+  assert.match(r.stdout, /unlinked\s+active\s+needs-link\s+-\s*$/m);
+  write(path.join(home, '.agents', 'skills', 'good', 'x.md'), 'edit');
+  r = skm(home, ['list']);
+  assert.match(r.stdout, /o\/good \[modified\]/);
+  assert.equal(JSON.parse(skm(home, ['list', '--json']).stdout).global.find((s) => s.name === 'good').origin.modified, true);
+});
+
+test('cli outdated: no lock means a plain message, no network', () => {
+  const r = skm(buildHome(), ['outdated']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /no installed skill has a GitHub source/);
+});
+
+test('cli update: non-interactive asks for --yes and changes nothing; --dry-run and --yes work', { skip: !supported }, () => {
+  const home = updatableHome();
+  const dir = path.join(home, '.agents', 'skills', 'good');
+  let r = skm(home, ['update', 'good']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /system Trash/);
+  assert.match(r.stderr, /re-run with --yes/);
+  assert.match(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'), /good skill/);
+  r = skm(home, ['update', 'good', '--dry-run']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /dry run: updated global\/good/);
+  assert.doesNotMatch(r.stdout, /Continue/);
+  assert.match(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'), /good skill/);
+  r = skm(home, ['update', 'good', '--yes']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'), /v2/);
+  assert.ok(fs.existsSync(path.join(trashed(home), 'SKILL.md')));
+  // modified refuses; not-tracked errors
+  write(path.join(dir, 'mine.md'), 'x');
+  r = skm(home, ['update', 'good', '--yes']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /\[modified\]/);
+  r = skm(home, ['update', 'dup', '--yes']);
+  assert.match(r.stderr, /\[not-tracked\]/);
+});

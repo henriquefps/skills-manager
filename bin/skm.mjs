@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import readline from 'node:readline/promises';
-import { getState, normalizeAll, runAction, SkmError } from '../src/core/index.mjs';
+import { checkUpdates, getState, normalizeAll, runAction, SkmError } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -13,6 +13,8 @@ const USAGE = `skm: skills manager
   skm promote <name>      local -> global (copy)   [--overwrite]
   skm pull <name>         global -> local (copy)   [--overwrite] [--target agents|claude]
   skm delete <name> [--local|--global]   moves it to the system Trash
+  skm outdated [--json]   check the GitHub source of each tracked global skill
+  skm update <name>|--all [--force]   update from the source; the old version goes to the system Trash
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
 Env: SKM_HOME overrides the home directory.`;
@@ -50,6 +52,7 @@ const STATUS_COLOR = {
   empty: c.dim,
   conflict: c.magenta,
 };
+const CHECK_COLOR = { 'up-to-date': c.green, 'update-available': c.yellow, 'removed-upstream': c.red, unreachable: c.red };
 const FIX = {
   'needs-link': 'skm normalize <name>   (creates the claude symlink)',
   duplicate: 'skm normalize <name>   (replaces the claude copy with a symlink)',
@@ -76,7 +79,7 @@ function listAll(state) {
 function printList(state) {
   const skills = listAll(state);
   if (!skills.length) return console.log('no skills found');
-  const rows = [['SCOPE', 'NAME', 'STATE', 'STATUS', 'ALSO IN'].map((h) => c.bold(h))];
+  const rows = [['SCOPE', 'NAME', 'STATE', 'STATUS', 'ORIGIN', 'ALSO IN'].map((h) => c.bold(h))];
   for (const s of skills) {
     const color = STATUS_COLOR[s.status] ?? ((x) => x);
     rows.push([
@@ -84,6 +87,7 @@ function printList(state) {
       s.name,
       s.active ? 'active' : c.dim('inactive'),
       color(s.status),
+      s.origin ? `${s.origin.source ?? '-'}${s.origin.modified ? c.yellow(' [modified]') : ''}` : '-',
       s.alsoIn.join(', '),
     ]);
   }
@@ -211,6 +215,41 @@ async function main(argv, opts = {}) {
     case 'delete': {
       if (!name) throw new SkmError('invalid', 'usage: skm delete <name>');
       return perform(opts, { action: 'delete', scope: resolveScope(state, name, flags), name }, flags, { destructive: true });
+    }
+
+    case 'outdated': {
+      const check = await checkUpdates(opts);
+      if (flags.json) return console.log(JSON.stringify(check, null, 2));
+      const rows = state.global.filter((s) => check.results[s.name]).map((s) => {
+        const r = check.results[s.name];
+        return [s.name, s.origin.source, (CHECK_COLOR[r.status] ?? ((x) => x))(r.status) + (r.error ? c.dim(` (${r.error})`) : '') + (s.origin.modified ? c.yellow(' [modified]') : '')];
+      });
+      if (!rows.length) return console.log('no installed skill has a GitHub source in the skills lock file');
+      return console.log(table([['NAME', 'SOURCE', 'STATUS'].map((h) => c.bold(h)), ...rows]));
+    }
+
+    case 'update': {
+      if (!flags.all && !name) throw new SkmError('invalid', 'usage: skm update <name> | --all');
+      const dryRun = Boolean(flags['dry-run']);
+      const force = Boolean(flags.force);
+      let names = [name];
+      if (flags.all) {
+        const { results } = await checkUpdates(opts);
+        const due = state.global.filter((s) => results[s.name]?.status === 'update-available');
+        names = due.filter((s) => force || !s.origin.modified).map((s) => s.name);
+        for (const s of due) if (!names.includes(s.name)) console.log(c.yellow(`skipped ${s.name}: modified locally (use --force)`));
+        if (!names.length) return console.log('nothing to update');
+      }
+      const plans = names.map((n) => runAction(opts, { action: 'update', scope: 'global', name: n, force, dryRun: true }));
+      if (plans.every((p) => !p.changes.length)) return report(plans[0], flags);
+      if (!dryRun) {
+        for (const p of plans) for (const ch of p.changes) console.log(`  ${ch}`);
+        const what = names.length === 1 ? names[0] : `${names.length} skills (${names.join(', ')})`;
+        if (!(await confirm(`${what} will be replaced by the version from its source; the old version goes to the system Trash.\nContinue?`, flags))) return console.log('aborted');
+      }
+      const done = names.map((n) => runAction(opts, { action: 'update', scope: 'global', name: n, force, dryRun }));
+      if (done.length === 1) return report(done[0], flags);
+      return report({ ok: true, message: `${dryRun ? 'dry run: ' : ''}updated ${done.length} skill(s)`, changes: done.flatMap((r) => r.changes) }, flags);
     }
 
     default:

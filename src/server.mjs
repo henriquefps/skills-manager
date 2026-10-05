@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getSkill, getState, resolveContext, runAction, SkmError } from './core/index.mjs';
+import { checkUpdates, getSkill, getState, resolveContext, runAction, SkmError } from './core/index.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const MIME = {
@@ -17,7 +17,7 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
 };
-const STATUS = { 'not-found': 404, exists: 409, diverged: 409, invalid: 400 };
+const STATUS = { 'not-found': 404, exists: 409, diverged: 409, modified: 409, 'removed-upstream': 409, invalid: 400, network: 502 };
 
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
@@ -64,7 +64,7 @@ function serveStatic(res, pathname) {
   fs.createReadStream(file).pipe(res);
 }
 
-/** Build the request handler. `opts` = { home, cwd } (injectable roots). */
+/** Build the request handler. `opts` = { home, cwd, fetch, git, token } (injectable roots and edges). */
 export function createServer(opts = {}) {
   const base = resolveContext(opts);
   return http.createServer(async (req, res) => {
@@ -73,9 +73,10 @@ export function createServer(opts = {}) {
       const hostOk = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host ?? '');
       if (!hostOk) return sendJson(res, 403, { ok: false, error: 'forbidden host', code: 'forbidden' });
       const url = new URL(req.url, 'http://127.0.0.1');
-      const ctx = resolveContext({ home: base.home, cwd: base.cwd }); // re-read project markers each request
+      const ctx = resolveContext({ ...opts, home: base.home, cwd: base.cwd }); // re-read project markers each request
 
       if (url.pathname === '/api/state' && req.method === 'GET') return sendJson(res, 200, getState(ctx));
+      if (url.pathname === '/api/updates' && req.method === 'GET') return sendJson(res, 200, await checkUpdates(ctx));
       if (url.pathname === '/api/skill' && req.method === 'GET') {
         const scope = url.searchParams.get('scope') ?? 'global';
         if (!['global', 'local'].includes(scope)) throw new SkmError('invalid', `invalid scope: ${scope}`);

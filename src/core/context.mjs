@@ -45,6 +45,9 @@ export function resolveContext(opts = {}) {
     home,
     platform: opts.platform ?? process.platform,
     now: opts.now,
+    fetch: opts.fetch ?? globalThis.fetch,
+    git: opts.git,
+    token: opts.token,
     cwd,
     project: root ? { root, name: path.basename(root) } : null,
     dirs(scope) {

@@ -5,6 +5,7 @@ import { dirHash, moveSync } from './fsutil.mjs';
 import { applyIgnoreOp, inactiveIgnoreOp } from './gitignore.mjs';
 import { locate, scanScope } from './scan.mjs';
 import { trashSync, trashTarget } from './trash.mjs';
+import { updateSkill } from './updates.mjs';
 
 // ---- plan executor -------------------------------------------------------
 
@@ -205,12 +206,12 @@ function del(ctx, { scope, name, dryRun }) {
 
 // ---- entry points --------------------------------------------------------
 
-export const ACTIONS = ['activate', 'deactivate', 'normalize', 'promote', 'copyToLocal', 'delete'];
+export const ACTIONS = ['activate', 'deactivate', 'normalize', 'promote', 'copyToLocal', 'delete', 'update'];
 
 /** Run one action. Throws SkmError on failure; returns { ok, message, changes }. */
 export function runAction(opts, req) {
   const ctx = resolveContext(opts);
-  const { action, scope, keep, overwrite = false, target, dryRun = false } = req ?? {};
+  const { action, scope, keep, overwrite = false, target, dryRun = false, force = false } = req ?? {};
   const name = assertName(req?.name);
   switch (action) {
     case 'activate':
@@ -229,6 +230,9 @@ export function runAction(opts, req) {
     case 'copyToLocal':
       requireScope(scope ?? 'global', ['global']);
       return copyToLocal(ctx, { name, overwrite, target, dryRun });
+    case 'update':
+      requireScope(scope ?? 'global', ['global']);
+      return updateSkill(ctx, { name, force: Boolean(force), dryRun });
     default:
       throw new SkmError('invalid', `unknown action: ${action}`);
   }

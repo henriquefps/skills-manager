@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertName, resolveContext, SkmError } from './context.mjs';
 import { dirHash, inspect, parseDescription, walk } from './fsutil.mjs';
+import { lockEntry, readLock } from './lock.mjs';
+import { gitTreeHash } from './treehash.mjs';
 
 const IGNORED = new Set(['synced', 'node_modules']);
 const isIgnored = (name) => name.startsWith('.') || IGNORED.has(name);
@@ -131,7 +133,16 @@ function buildSkill(scope, name, locs) {
   push(locs.c, 'claude', false);
   push(locs.ia, 'agents', true);
   push(locs.ic, 'claude', true);
-  return { name, scope, active, status, issues, description, files, bytes, mtime, locations, alsoIn: [] };
+  return { name, scope, active, status, issues, description, files, bytes, mtime, locations, alsoIn: [], origin: null, dir };
+}
+
+/** Provenance from a lock entry; `modified` compares the local git tree hash with the recorded one. */
+function originOf(e, dir) {
+  let modified = false;
+  try {
+    modified = Boolean(dir && e.skillFolderHash && gitTreeHash(dir) !== e.skillFolderHash);
+  } catch {}
+  return { source: e.source ?? null, url: e.sourceUrl ?? null, skillPath: e.skillPath ?? null, installedAt: e.installedAt ?? null, updatedAt: e.updatedAt ?? null, modified };
 }
 
 export function scanScope(opts, scope) {
@@ -146,6 +157,12 @@ export function scanScope(opts, scope) {
     const locs = locate(ctx, scope, name);
     if (!Object.values(locs).some(Boolean)) continue;
     skills.push(buildSkill(scope, name, locs));
+  }
+  const lock = scope === 'global' ? readLock(ctx.home) : null;
+  for (const s of skills) {
+    const e = lockEntry(lock, s.name);
+    if (e) s.origin = originOf(e, s.dir);
+    delete s.dir;
   }
   return skills;
 }

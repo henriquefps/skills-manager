@@ -90,12 +90,31 @@ skm deactivate <name>     [--local|--global]
 skm promote <name>        local -> global (copy)   [--overwrite]
 skm pull <name>           global -> local (copy)   [--overwrite] [--target agents|claude]
 skm delete <name>         [--local|--global]   # moves to the system Trash; restore it from there by hand
+skm outdated [--json]     check the GitHub source of each tracked global skill
+skm update <name>         [--force] [--dry-run] [--yes]
+skm update --all          [--force] [--dry-run] [--yes]   # only the ones with an update available
 ```
 
 General options: `--yes` (skip confirmation), `--dry-run` (only show what would happen),
 `--json`, `--port <n>`, `--no-open`.
 
 If the same name exists in both global and local, pass `--local` or `--global`.
+
+## Checking and updating skills
+
+Skills installed with `npx skills` are recorded in `~/.agents/.skill-lock.json` (repo, path in the
+repo and the git tree hash of the folder). skm reads it, never needs it, and shows the repo in the
+`ORIGIN` column of `skm list`. A skill whose folder no longer matches the recorded hash is marked
+`[modified]`.
+
+`skm outdated` asks GitHub (one call pair per repo; it uses `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth token`
+when available, otherwise it is anonymous) and reports `up-to-date`, `update-available`,
+`removed-upstream` or `unreachable`. It runs only when you ask.
+
+`skm update <name>` clones the repo (with your git credentials), moves the old folder to the system
+Trash, copies the new one in place and updates the hash and `updatedAt` in the lock file; all other
+lock fields and its indentation are kept. A modified skill is refused unless you pass `--force`; an
+inactive skill is updated where it lives. Use `--dry-run` to see the plan first.
 
 ## Recipes
 
