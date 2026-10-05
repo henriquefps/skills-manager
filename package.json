@@ -1,0 +1,10 @@
+{
+  "name": "skm",
+  "version": "0.1.0",
+  "description": "Skills manager: global and local agent skills, with a local web UI",
+  "type": "module",
+  "bin": { "skm": "bin/skm.mjs" },
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test/" },
+  "license": "MIT"
+}
