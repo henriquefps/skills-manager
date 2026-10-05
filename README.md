@@ -1,171 +1,179 @@
+<img src="docs/img/icon.svg" alt="" width="96" height="96">
+
 # skm: skills manager
 
-Gerencie as skills dos seus agentes (pastas com um `SKILL.md`) em um só lugar, pelo
-terminal ou por uma interface web local. O `skm` enxerga ao mesmo tempo as skills
-**globais** (da sua home) e as **locais** (do projeto em que você está).
+Manage your agent skills (folders with a `SKILL.md`) in one place, from the terminal or
+a local web UI. `skm` sees your **global** skills (in your home folder) and your **local**
+skills (in the project you are in) at the same time.
 
-- Sem dependências, sem build. Só Node.js 20 ou mais novo.
-- Roda só em `127.0.0.1`; nada sai da sua máquina.
-- Nunca apaga de verdade: apagar move para uma pasta de lixeira.
+![skm web UI](docs/img/screenshot.png)
 
-## Instalação
+- No dependencies, no build step. Node.js 20 or newer is all you need.
+- Runs on `127.0.0.1` only; nothing leaves your machine.
+- Never really deletes: delete moves the skill to a trash folder.
+
+## Install
 
 ```sh
-git clone <url-do-repo> ~/orca/projects/skills-manager
+git clone https://github.com/henriquefps/skills-manager.git ~/orca/projects/skills-manager
 cd ~/orca/projects/skills-manager
-node -v   # precisa ser >= 20
+node -v   # must be >= 20
 ```
 
-Escolha uma das formas de ter o comando `skm` no terminal:
+Pick one way to get the `skm` command in your terminal:
 
-**Alias no `~/.zshrc`** (sem instalar nada globalmente):
+**Alias in `~/.zshrc`** (installs nothing globally):
 
 ```sh
 alias skm='node "$HOME/orca/projects/skills-manager/bin/skm.mjs"'
 ```
 
-Depois rode `source ~/.zshrc`.
+Then run `source ~/.zshrc`.
 
-**Ou `npm link`** (cria o comando `skm` no seu PATH):
+**Or `npm link`** (puts a `skm` command on your PATH):
 
 ```sh
 npm link
 ```
 
-Para conferir: `skm --help`.
+Check it with `skm --help`.
 
-## Como as skills são organizadas
+## How skills are organized
 
-O `skm` assume esta convenção, e o comando `normalize` leva suas skills até ela.
+`skm` assumes this convention, and the `normalize` command brings your skills to it.
 
-| O quê | Onde |
+| What | Where |
 | --- | --- |
-| Repositório central global | `~/.agents/skills/<nome>/` (pasta real) |
-| Visão do Claude (global) | `~/.claude/skills/<nome>` (symlink para a pasta central) |
-| Globais inativas | `~/.agents/skills-inactive/<nome>/` |
-| Lixeira global | `~/.agents/skills-trash/<nome>-<timestamp>/` |
-| Skills locais | `<projeto>/.claude/skills` e/ou `<projeto>/.agents/skills` |
-| Locais inativas | `skills-inactive` ao lado de onde a skill estava |
+| Global central store | `~/.agents/skills/<name>/` (real folder) |
+| Claude view (global) | `~/.claude/skills/<name>` (symlink to the central folder) |
+| Inactive global skills | `~/.agents/skills-inactive/<name>/` |
+| Global trash | `~/.agents/skills-trash/<name>-<timestamp>/` |
+| Local skills | `<project>/.claude/skills` and/or `<project>/.agents/skills` |
+| Inactive local skills | `skills-inactive` next to where the skill was |
 
-A raiz do projeto é o ancestral mais próximo do diretório atual que tenha `.git`,
-`.agents` ou `.claude`.
+The project root is the nearest ancestor of the current directory that has `.git`,
+`.agents` or `.claude`.
 
-## Uso rápido
+## Quick start
 
 ```sh
-cd meu-projeto
-skm            # abre a interface web (porta 4747) para global + local
-skm list       # tabela no terminal
-skm doctor     # lista problemas e o comando que resolve cada um
+cd my-project
+skm            # opens the web UI (port 4747) for global + local
+skm list       # table in the terminal
+skm doctor     # lists problems and the command that fixes each one
 ```
 
-## A interface web
+## The web UI
 
-Rodar `skm` sem argumentos sobe o servidor e abre o navegador. Lá você pode:
+Running `skm` with no arguments starts the server and opens your browser. There you can:
 
-- alternar entre **Global** e **Local**, buscar e filtrar por status;
-- **ativar/inativar** com o toggle de cada skill;
-- **Promover** uma skill local para global, ou **Copiar para local** uma global;
-- **Normalizar** uma skill com problema (para `diverged`, escolher qual lado manter);
-- **Apagar** (vai para a lixeira), com confirmação;
-- abrir **Details** para ver o `SKILL.md` e a árvore de arquivos;
-- usar **Fix all** no banner de problemas, com pré-visualização do que vai mudar.
+- switch between **Global** and **Local**, search, and filter by status;
+- **activate/deactivate** a skill with its toggle;
+- **Promote** a local skill to global, or **Copy to local** a global one;
+- **Normalize** a skill with a problem (for `diverged`, pick which side to keep);
+- **Delete** (goes to trash), with a confirmation;
+- open **Details** to see the `SKILL.md` and the file tree;
+- use **Fix all** in the problems banner, with a preview of what will change.
 
-Opções: `--port <n>` para escolher a porta (se estiver ocupada, usa a próxima livre)
-e `--no-open` para não abrir o navegador.
+Options: `--port <n>` picks the port (if it is taken, the next free one is used) and
+`--no-open` skips opening the browser.
 
-## Comandos
+## Commands
 
 ```
-skm                       abre a UI do diretório atual
-skm list [--json]         skills globais e locais com status
-skm doctor                problemas encontrados e a correção sugerida
-skm normalize [nome|--all] [--keep agents|claude] [--dry-run]
-skm activate <nome>       [--local|--global]
-skm deactivate <nome>     [--local|--global]
-skm promote <nome>        local -> global (cópia)   [--overwrite]
-skm pull <nome>           global -> local (cópia)   [--overwrite] [--target agents|claude]
-skm delete <nome>         [--local|--global]
+skm                       open the UI for the current directory
+skm list [--json]         global and local skills with status
+skm doctor                problems found and the suggested fix
+skm normalize [name|--all] [--keep agents|claude] [--dry-run]
+skm activate <name>       [--local|--global]
+skm deactivate <name>     [--local|--global]
+skm promote <name>        local -> global (copy)   [--overwrite]
+skm pull <name>           global -> local (copy)   [--overwrite] [--target agents|claude]
+skm delete <name>         [--local|--global]
 ```
 
-Opções gerais: `--yes` (pula a confirmação), `--dry-run` (só mostra o que faria),
+General options: `--yes` (skip confirmation), `--dry-run` (only show what would happen),
 `--json`, `--port <n>`, `--no-open`.
 
-Se o mesmo nome existe em global e local, informe `--local` ou `--global`.
+If the same name exists in both global and local, pass `--local` or `--global`.
 
-## Receitas
+## Recipes
 
-**Arrumar a bagunça de duplicatas entre `.agents` e `.claude`**
+**Clean up duplicates between `.agents` and `.claude`**
 
 ```sh
 skm doctor
-skm normalize --all --dry-run   # veja o que vai mudar
+skm normalize --all --dry-run   # see what will change
 skm normalize --all
 ```
 
-Isso adota skills que só existem no `.claude` para o `.agents`, troca cópias idênticas
-por symlink e cria os symlinks que faltam. Skills `diverged` (conteúdo diferente nos
-dois lados) nunca são resolvidas sozinhas:
+This adopts skills that only exist in `.claude` into `.agents`, replaces identical copies
+with a symlink, and creates the missing symlinks. `diverged` skills (different content on
+each side) are never resolved on their own:
 
 ```sh
-skm normalize log-session --keep agents   # ou --keep claude
+skm normalize log-session --keep agents   # or --keep claude
 ```
 
-**Desligar uma skill sem apagar**
+**Turn a skill off without deleting it**
 
 ```sh
 skm deactivate wrangler
-skm activate wrangler     # para voltar
+skm activate wrangler     # to bring it back
 ```
 
-**Transformar uma skill do projeto em global**
+When you deactivate a **local** skill, `skm` also adds `skills-inactive/` to the project's
+`.gitignore` (only if one exists and nothing already mentions it), so switched-off skills
+never end up in your repo.
+
+**Make a project skill global**
 
 ```sh
-cd meu-projeto
-skm promote minha-skill
+cd my-project
+skm promote my-skill
 ```
 
-**Usar uma skill global só neste projeto**
+**Use a global skill only in this project**
 
 ```sh
-skm pull minha-skill                  # copia para .claude/skills do projeto
-skm pull minha-skill --target agents  # ou para .agents/skills
+skm pull my-skill                  # copies into the project's .claude/skills
+skm pull my-skill --target agents  # or into .agents/skills
 ```
 
-## Status das skills
+## Skill statuses
 
-| Status | Significado | Correção |
+| Status | Meaning | Fix |
 | --- | --- | --- |
-| `ok` | Tudo certo | |
-| `needs-link` | Existe em `.agents`, falta o symlink no `.claude` | `normalize` |
-| `duplicate` | Pasta real nos dois lados, idênticas | `normalize` |
-| `diverged` | Pasta real nos dois lados, conteúdo diferente | `normalize --keep agents\|claude` |
-| `claude-only` | Só existe no `.claude` | `normalize` (adota no `.agents`) |
-| `broken-link` | Symlink aponta para algo que não existe | revisar manualmente |
-| `wrong-link` | Symlink do `.claude` aponta para outro lugar | `normalize` |
-| `empty` | Pasta sem `SKILL.md` | revisar ou apagar |
-| `conflict` | Há arquivos `*.sync-conflict-*` do Syncthing | resolver manualmente |
+| `ok` | All good | |
+| `needs-link` | Exists in `.agents`, the symlink in `.claude` is missing | `normalize` |
+| `duplicate` | Real folder on both sides, identical | `normalize` |
+| `diverged` | Real folder on both sides, different content | `normalize --keep agents\|claude` |
+| `claude-only` | Only exists in `.claude` | `normalize` (adopts it into `.agents`) |
+| `broken-link` | Symlink points to something that does not exist | review manually |
+| `wrong-link` | The `.claude` symlink points somewhere else | `normalize` |
+| `empty` | Folder without a `SKILL.md` | review or delete |
+| `conflict` | Has Syncthing `*.sync-conflict-*` files | resolve manually |
 
-Pastas ocultas como `.trash`, `.stfolder` e `synced` são ignoradas.
+Hidden folders such as `.trash`, `.stfolder` and `synced` are ignored.
 
-## Desenvolvimento
+## Development
 
 ```sh
-npm test    # node:test, sempre em pastas temporárias
+npm test    # node:test, always on temp folders
 ```
 
-Para experimentar sem tocar na sua home real, aponte a home para uma pasta qualquer:
+To try it without touching your real home, point the home at any folder:
 
 ```sh
 SKM_HOME=/tmp/fake-home skm list
 ```
 
-Estrutura:
+Layout:
 
 ```
 bin/skm.mjs      CLI
-src/core/        lógica de arquivos (scan, ações)
-src/server.mjs   servidor HTTP + API JSON
-src/ui/          interface (HTML, JS e CSS, tema HFPS)
-docs/ARCHITECTURE.md   contrato completo (modelo, ações, API)
+src/core/        filesystem logic (scan, actions)
+src/server.mjs   HTTP server + JSON API
+src/ui/          UI (HTML, JS and CSS, HFPS theme)
+docs/ARCHITECTURE.md   full contract (model, actions, API)
 ```

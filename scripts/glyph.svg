@@ -1,0 +1,11 @@
+<!-- skm: three stacked skill rows, each with a toggle knob (on at the front, off behind). Drawn in a 128 box. -->
+<g stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none">
+  <rect x="16" y="18" width="96" height="24" rx="12"/>
+  <rect x="16" y="52" width="96" height="24" rx="12" opacity="0.7"/>
+  <rect x="16" y="86" width="96" height="24" rx="12" opacity="0.45"/>
+</g>
+<g fill="currentColor">
+  <circle cx="96" cy="30" r="6"/>
+  <circle cx="32" cy="64" r="6" opacity="0.7"/>
+  <circle cx="32" cy="98" r="6" opacity="0.45"/>
+</g>

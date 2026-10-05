@@ -123,8 +123,7 @@ Errors are always JSON. State is re-read from disk on every request (no cache).
 
 ## Visual identity
 
-HFPS olive-neutral theme, Inter. Source of truth:
-`/Users/henriquefps/Documents/writting-assistant/.claude/skills/hfps-visuals/SKILL.md`
-and `.../hfps-visuals/assets/shared.css` (tokens `--bg --card --fg --muted-fg --border
+HFPS olive-neutral theme, Inter (the hfps.dev design system, `hfps-visuals` skill and its
+`shared.css`; tokens `--bg --card --fg --muted-fg --border
 --line --accent --accent-soft --accent-soft-border`, radius 16/20, eyebrow + title + deck +
 white card). Also support dark mode via `prefers-color-scheme` with the same olive hue (107).
