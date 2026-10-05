@@ -202,3 +202,79 @@ skm update --all [--force] [--dry-run] [--yes]    only update-available, skips m
 ```
 `skm list` shows an `ORIGIN` column (repo or `-`) and a `modified` marker; `skm doctor` unchanged.
 Confirmation (TTY, skipped by `--yes`/`--dry-run`) says the old version goes to the system Trash.
+
+## Context cost, lint, update diff, projects
+
+Only `.agents` and `.claude` are supported as skill roots (the ecosystem is converging on `.agents`).
+No agent-specific plugins, no installer (use `npx skills`), no Syncthing conflict resolver.
+
+### Context cost
+
+Active skills cost context in every session: the agent loads each skill's `name` + `description`
+(frontmatter) up front, and the whole `SKILL.md` body when the skill is invoked. Token estimate:
+`Math.ceil(chars / 4)` (documented as an approximation, never presented as exact).
+
+`Skill.cost = { "listing": 112, "full": 4310 }` (`listing` = name + description, `full` = whole SKILL.md).
+A skill present in both `.agents` and `.claude` (symlink or copy) counts once. Inactive skills have
+`cost` but are excluded from totals. `GET /api/state` adds
+`"totals": { "global": { "active": 10, "listingTokens": 1450 }, "local": { "active": 1, "listingTokens": 90 }, "listingTokens": 1540 }`.
+CLI: `skm cost [--json]` (table sorted by listing cost desc, with totals, active only unless `--all`);
+`skm list` gets a `TOK` column (listing tokens).
+
+### Lint
+
+`Skill.lint = [{ "rule": "name-mismatch", "severity": "warn", "message": "..." }]` (empty array when clean).
+Rules (severity): `no-skill-md` error (folder without SKILL.md), `bad-frontmatter` error (missing or
+unparseable `---` block), `missing-name` error, `missing-description` error, `name-mismatch` warn
+(frontmatter name != folder name), `name-invalid` warn (not lowercase letters/digits/hyphens or > 64 chars),
+`description-long` warn (> 1024 chars), `description-short` warn (< 40 chars), `no-trigger-hint` info
+(description never says when to use it: no "use when", "trigger", "when the user", "use this skill",
+"use for" or similar), `broken-reference` warn (a relative markdown link or `references/...`,
+`scripts/...`, `assets/...` path mentioned in SKILL.md that does not exist in the folder), `skill-md-large`
+info (> 500 lines). `GET /api/state` skills carry `lint`; the existing `issues` array is unchanged
+(`lint` is additive and content-based, `issues` stays about layout).
+CLI: `skm lint [name] [--json] [--all]` prints findings grouped by skill; exit code 1 if any `error`.
+
+### Update diff
+
+`GET /api/diff?name=<global skill name>` -> compares the installed folder with the upstream folder
+(same clone logic as update, temp dir cleaned afterwards):
+```json
+{ "name": "wrangler", "from": "45cc198", "to": "2dab137",
+  "stats": { "added": 1, "removed": 0, "modified": 2, "insertions": 40, "deletions": 12 },
+  "files": [ { "path": "SKILL.md", "status": "modified", "binary": false,
+               "hunks": [ { "oldStart": 3, "oldLines": 4, "newStart": 3, "newLines": 6,
+                            "lines": [" context", "-removed", "+added"] } ] } ] }
+```
+`status` is `added | removed | modified`; binary files have `binary: true` and no hunks; 3 lines of context;
+zero-dependency line diff (Myers or LCS). Errors as documented for update (`not-tracked`, `removed-upstream`,
+`network`). Since the diff is installed -> upstream, local edits show up as removals: the UI/CLI explain that.
+CLI: `skm diff <name>` (colored unified output, `--json`), and `skm update` (TTY) prints the diff stat
+before the confirmation.
+
+### Projects (user-configured scan roots)
+
+Config file `<home>/.config/skm/config.json`, created only when the user changes something:
+`{ "projectRoots": ["~/orca/projects", "~/Documents"], "scanDepth": 3 }` (`~` expanded at read time, defaults:
+no roots, depth 3). The scan looks, under each root up to `scanDepth` levels, for directories that contain
+`.agents/skills` or `.claude/skills` with at least one skill; it skips `node_modules`, `.git`, `.Trash`, dot
+folders (except the `.agents`/`.claude` it looks for), does not follow symlinked directories and never
+descends into a found project. No roots configured means the Projects view asks the user to add some;
+nothing is scanned by default.
+
+`GET /api/config` -> `{ "projectRoots": [...], "scanDepth": 3 }`;
+`PUT /api/config` body same shape (validates: array of existing directories, depth 1..6) -> same shape or 4xx JSON error.
+`GET /api/projects` ->
+```json
+{ "roots": ["/Users/me/orca/projects"],
+  "projects": [ { "root": "/Users/me/orca/projects/foo", "name": "foo",
+                  "skills": [ { "name": "release-notes", "active": true, "status": "ok", "cost": { "listing": 40, "full": 900 } } ] } ],
+  "repeated": [ { "name": "release-notes", "projects": ["/Users/me/orca/projects/foo", "/Users/me/Documents/bar"],
+                  "inGlobal": false, "identical": true } ] }
+```
+`repeated` = the same skill name in 2+ projects (`identical` compares folder hashes). `POST /api/action`
+accepts an optional `"projectRoot": "/abs/project"` (must be inside a configured root or be the current
+project): the action runs with that project as the local scope, so `promote`, `copyToLocal`, `activate`,
+`deactivate`, `delete` work on any scanned project.
+CLI: `skm projects` (scan and list, `--json`), `skm projects add <path>`, `skm projects rm <path>`,
+`skm projects depth <n>`, `skm config` (prints the file path and content).
