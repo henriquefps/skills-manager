@@ -1,6 +1,7 @@
 // Tiny stand-in for src/server.mjs: serves src/ui and a fake in-memory /api/*.
 // Usage: node src/ui/mock/mock-server.mjs   (PORT=4748, MOCK_NO_PROJECT=1 for a project-less cwd,
-// MOCK_ROOTS=1 to start with scan roots configured)
+// MOCK_ROOTS=1 to start with scan roots configured, MOCK_PM_FORBIDDEN=1 to make every
+// POST /api/project-meta answer with the `forbidden` error)
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -122,11 +123,71 @@ function seedProjects() {
     at(P, 'design-tokens', 'ok', 'Pixel site design tokens and how to apply them. Use when styling components.', { active: false, locations: [loc('claude', `${P}/.claude/skills-inactive/design-tokens`)] }),
     at(P, 'wrangler', 'ok', 'Cloudflare Workers CLI for the marketing site.'),
   ];
+  const O = '/Users/demo/Documents/old-prototype';
+  pdb[O] = [at(O, 'sketch-helper', 'ok', 'Quick sketching helpers for the abandoned prototype.')];
   pdb[N] = [
     at(N, 'release-notes', 'ok', 'Draft release notes from merged pull requests. Use when cutting a release.'),
     at(N, 'api-conventions', 'diverged', 'REST naming, pagination and error shape for notes-api. Use when adding an endpoint.', { issues: ['agents and claude copies differ'] }),
     at(N, 'atlas-conventions', 'ok', 'Naming, folder layout and review rules for the Atlas monorepo.'),
   ];
+}
+// ---- project index: stored meta (editable through POST /api/project-meta) and computed auto facts ----
+const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+const pmetaSeed = {
+  [ROOT]: { description: 'Monorepo for the Atlas dashboard: web app, API and shared packages.', tags: ['saas', 'work'], status: 'active', notes: 'Release branches are cut on Thursdays. Staging deploys from main.' },
+  '/Users/demo/code/ledger': { description: '', tags: ['finance', 'work'], status: 'paused', notes: 'Waiting on the new accounting provider API before resuming.' },
+  '/Users/demo/code/pixel-site': { description: 'Marketing site for Pixel, built with Vite and Tailwind and deployed on Cloudflare.', tags: ['design', 'saas'], status: '', notes: '' },
+  '/Users/demo/Documents/notes-api': { description: '', tags: [], status: '', notes: '' },
+  '/Users/demo/Documents/old-prototype': { description: 'Early prototype of the mobile app, kept for reference only.', tags: ['mobile'], status: 'archived', notes: '' },
+};
+const pauto = {
+  [ROOT]: { remote: 'github.com/demo/atlas', branch: 'main', lastCommitAt: daysAgo(0.1), stack: ['node', 'react', 'typescript', 'vite'], readme: 'Atlas is the internal dashboard for tracking deliveries.' },
+  '/Users/demo/code/ledger': { remote: 'gitlab.com/demo-team/ledger', branch: 'feature/import-csv', lastCommitAt: daysAgo(34), stack: ['python'], readme: 'Double-entry ledger with CSV import and monthly reports.' },
+  '/Users/demo/code/pixel-site': { remote: 'github.com/demo/pixel-site', branch: 'main', lastCommitAt: daysAgo(3), stack: ['node', 'shadcn', 'tailwind', 'vite'], readme: 'Static marketing site.' },
+  '/Users/demo/Documents/notes-api': { branch: 'main', lastCommitAt: daysAgo(190), stack: ['express', 'node'], readme: 'REST API that stores and searches personal notes, with token auth and full-text search over every note body.' },
+  '/Users/demo/Documents/old-prototype': { remote: 'github.com/demo/old-prototype', branch: 'master', lastCommitAt: daysAgo(560), stack: ['capacitor', 'cordova'] },
+};
+const pmeta = {};
+const metaForProject = (root) => { const m = pmeta[root] || {}; return { description: m.description || '', tags: [...(m.tags || [])], status: m.status || '', notes: m.notes || '' }; };
+function resetProjectMeta() {
+  for (const k of Object.keys(pmeta)) delete pmeta[k];
+  for (const [k, v] of Object.entries(pmetaSeed)) pmeta[k] = { ...v, tags: [...v.tags] };
+}
+resetProjectMeta();
+function applyProjectMeta(b) {
+  if (process.env.MOCK_PM_FORBIDDEN) return err('forbidden', `${b.root} is outside the configured project folders.`, 403);
+  if (typeof b.root !== 'string' || !b.root.startsWith('/')) return err('invalid', 'root must be an absolute project path.', 400);
+  if (b.root !== ROOT && !inRoots(b.root)) return err('forbidden', `${b.root} is outside the configured project folders.`, 403);
+  if (!catalog().some((p) => p.root === b.root)) return err('not-found', `${b.root} does not exist.`, 404);
+  const next = metaForProject(b.root);
+  if (b.description !== undefined) {
+    if (typeof b.description !== 'string') return err('invalid', 'description must be text.', 400);
+    if (b.description.length > 300) return err('invalid', `description is ${b.description.length} characters. The limit is 300.`, 400);
+    next.description = b.description;
+  }
+  if (b.notes !== undefined) {
+    if (typeof b.notes !== 'string') return err('invalid', 'notes must be text.', 400);
+    if (b.notes.length > 2000) return err('invalid', `notes is ${b.notes.length} characters. The limit is 2000.`, 400);
+    next.notes = b.notes;
+  }
+  if (b.status !== undefined) {
+    if (!['', 'active', 'paused', 'archived'].includes(b.status)) return err('invalid', `Unknown status "${b.status}". Use active, paused or archived.`, 400);
+    next.status = b.status;
+  }
+  for (const f of ['tags', 'addTags', 'removeTags']) {
+    if (b[f] === undefined) continue;
+    if (!Array.isArray(b[f]) || !b[f].every((t) => typeof t === 'string')) return err('invalid', `${f} must be an array of strings.`, 400);
+    const bad = b[f].find((t) => !TAG_RE.test(t));
+    if (bad !== undefined) return err('invalid', `Invalid tag "${bad}". Tags are lowercase letters, digits and hyphens, 1 to 24 characters.`, 400);
+    if (f === 'tags') next.tags = b[f];
+    else if (f === 'addTags') next.tags = [...next.tags, ...b[f]];
+    else next.tags = next.tags.filter((t) => !b[f].includes(t));
+  }
+  next.tags = [...new Set(next.tags)].sort();
+  if (next.tags.length > 8) return err('invalid', 'A project can have at most 8 tags.', 400);
+  if (!next.description && !next.notes && !next.tags.length && (!next.status || next.status === 'active')) delete pmeta[b.root];
+  else pmeta[b.root] = next;
+  return { body: { ok: true, meta: metaForProject(b.root) } };
 }
 const catalog = () => [
   { root: ROOT, name: 'atlas', list: db.local },
@@ -140,7 +201,7 @@ function setLocalList(root, arr) { if (!root || root === ROOT) db.local = arr; e
 
 function projectsPayload() {
   const projects = visibleProjects().filter((p) => p.list.length).map((p) => ({
-    root: p.root, name: p.name,
+    root: p.root, name: p.name, meta: metaForProject(p.root), auto: pauto[p.root] || {},
     skills: p.list.map((x) => ({ name: x.name, active: x.active, status: x.status, cost: x.cost, meta: metaOf(x.name) })),
   }));
   const byName = new Map();
@@ -406,9 +467,16 @@ createServer(async (req, res) => {
     if (url.pathname === '/api/_reset' && req.method === 'POST') {
       // Test hook for the mock only: back to the seed data (used by screenshot runs).
       seed();
+      resetProjectMeta();
       for (const k of Object.keys(metaDb)) delete metaDb[k];
       Object.assign(metaDb, JSON.parse(metaSeed));
       return send(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/project-meta' && req.method === 'POST') {
+      let raw = '';
+      for await (const c of req) raw += c;
+      const out = applyProjectMeta(JSON.parse(raw || '{}'));
+      return send(res, out.status || 200, out.body);
     }
     if (url.pathname === '/api/meta' && req.method === 'POST') {
       let raw = '';
