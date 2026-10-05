@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assertName, resolveContext, SkmError } from './context.mjs';
+import { costOf, totalsOf } from './cost.mjs';
 import { dirHash, inspect, parseDescription, walk } from './fsutil.mjs';
+import { lintSkill } from './lint.mjs';
 import { lockEntry, readLock } from './lock.mjs';
 import { gitTreeHash } from './treehash.mjs';
 
@@ -107,9 +109,13 @@ function buildSkill(scope, name, locs) {
   let files = 0;
   let bytes = 0;
   let mtime = null;
+  let cost = { listing: 0, full: 0 };
+  const lint = dir ? lintSkill(dir, name) : [];
   if (dir) {
     try {
-      description = parseDescription(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'));
+      const md = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+      description = parseDescription(md);
+      cost = costOf(md, name);
     } catch {}
     let latest = fs.statSync(dir).mtimeMs;
     for (const e of walk(dir)) {
@@ -133,7 +139,7 @@ function buildSkill(scope, name, locs) {
   push(locs.c, 'claude', false);
   push(locs.ia, 'agents', true);
   push(locs.ic, 'claude', true);
-  return { name, scope, active, status, issues, description, files, bytes, mtime, locations, alsoIn: [], origin: null, dir };
+  return { name, scope, active, status, issues, description, files, bytes, mtime, locations, alsoIn: [], origin: null, cost, lint, dir };
 }
 
 /** Provenance from a lock entry; `modified` compares the local git tree hash with the recorded one. */
@@ -175,7 +181,7 @@ export function getState(opts = {}) {
   const l = new Set(local.map((s) => s.name));
   for (const s of global) if (l.has(s.name)) s.alsoIn.push('local');
   for (const s of local) if (g.has(s.name)) s.alsoIn.push('global');
-  return { cwd: ctx.cwd, project: ctx.project, global, local };
+  return { cwd: ctx.cwd, project: ctx.project, global, local, totals: totalsOf(global, local) };
 }
 
 export function getSkill(opts, scope, name) {

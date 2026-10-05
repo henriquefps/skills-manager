@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import readline from 'node:readline/promises';
-import { checkUpdates, getState, normalizeAll, runAction, SkmError } from '../src/core/index.mjs';
+import { checkUpdates, diffUpstream, getState, normalizeAll, runAction, SkmError, statLine } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -14,6 +14,9 @@ const USAGE = `skm: skills manager
   skm pull <name>         global -> local (copy)   [--overwrite] [--target agents|claude]
   skm delete <name> [--local|--global]   moves it to the system Trash
   skm outdated [--json]   check the GitHub source of each tracked global skill
+  skm cost [--json] [--all]   context cost (estimated tokens) of active skills
+  skm lint [name] [--json] [--all]   check SKILL.md content; exit 1 on errors
+  skm diff <name> [--json]   installed vs upstream (local edits show as removals)
   skm update <name>|--all [--force]   update from the source; the old version goes to the system Trash
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
@@ -79,7 +82,7 @@ function listAll(state) {
 function printList(state) {
   const skills = listAll(state);
   if (!skills.length) return console.log('no skills found');
-  const rows = [['SCOPE', 'NAME', 'STATE', 'STATUS', 'ORIGIN', 'ALSO IN'].map((h) => c.bold(h))];
+  const rows = [['SCOPE', 'NAME', 'STATE', 'STATUS', 'TOK', 'ORIGIN', 'ALSO IN'].map((h) => c.bold(h))];
   for (const s of skills) {
     const color = STATUS_COLOR[s.status] ?? ((x) => x);
     rows.push([
@@ -87,6 +90,7 @@ function printList(state) {
       s.name,
       s.active ? 'active' : c.dim('inactive'),
       color(s.status),
+      String(s.cost?.listing ?? 0),
       s.origin ? `${s.origin.source ?? '-'}${s.origin.modified ? c.yellow(' [modified]') : ''}` : '-',
       s.alsoIn.join(', '),
     ]);
@@ -145,6 +149,21 @@ async function perform(opts, req, flags, { destructive = false } = {}) {
     }
   }
   report(runAction(opts, { ...req, dryRun }), flags);
+}
+
+/** Colored unified diff of installed -> upstream. */
+function printDiff(d) {
+  console.log(`${c.bold(d.name)}  ${d.from} (installed) -> ${d.to} (upstream)`);
+  if (!d.files.length) return console.log('no differences');
+  for (const f of d.files) {
+    console.log(c.bold(`\n${f.status} ${f.path}${f.binary ? ' (binary)' : ''}`));
+    for (const h of f.hunks) {
+      console.log(c.magenta(`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`));
+      for (const l of h.lines) console.log(l[0] === '+' ? c.green(l) : l[0] === '-' ? c.red(l) : l);
+    }
+  }
+  console.log(`\n${statLine(d.stats)}`);
+  console.log(c.dim('installed -> upstream: your local edits show up as removals'));
 }
 
 // ---- commands ------------------------------------------------------------
@@ -217,6 +236,41 @@ async function main(argv, opts = {}) {
       return perform(opts, { action: 'delete', scope: resolveScope(state, name, flags), name }, flags, { destructive: true });
     }
 
+    case 'cost': {
+      const rows = listAll(state).filter((s) => flags.all || s.active).sort((x, y) => y.cost.listing - x.cost.listing || x.name.localeCompare(y.name));
+      if (flags.json) return console.log(JSON.stringify({ skills: rows.map((s) => ({ name: s.name, scope: s.scope, active: s.active, cost: s.cost })), totals: state.totals }, null, 2));
+      if (!rows.length) return console.log('no skills found');
+      console.log(table([['SCOPE', 'NAME', 'LISTING', 'FULL'].map((h) => c.bold(h)), ...rows.map((s) => [s.scope, s.active ? s.name : c.dim(`${s.name} (inactive)`), String(s.cost.listing), String(s.cost.full)])]));
+      const t = state.totals;
+      console.log(`\n${t.global.active} global + ${t.local.active} local active skills: ~${t.listingTokens} tokens loaded in every session (global ${t.global.listingTokens}, local ${t.local.listingTokens})`);
+      return console.log(c.dim('listing = name + description, full = whole SKILL.md; tokens are estimated as chars / 4'));
+    }
+
+    case 'lint': {
+      const skills = listAll(state).filter((s) => (name ? s.name === name : flags.all || s.active));
+      if (name && !skills.length) throw new SkmError('not-found', `no skill named "${name}"`);
+      const bad = skills.filter((s) => s.lint.length);
+      if (flags.json) console.log(JSON.stringify(bad.map((s) => ({ name: s.name, scope: s.scope, lint: s.lint })), null, 2));
+      else if (!bad.length) console.log(c.green(`${skills.length} skill(s) checked, no findings`));
+      else {
+        const SEV = { error: c.red, warn: c.yellow, info: c.dim };
+        for (const s of bad) {
+          console.log(c.bold(`${s.scope}/${s.name}`));
+          for (const f of s.lint) console.log(`  ${(SEV[f.severity] ?? ((x) => x))(f.severity.padEnd(5))} ${f.rule}: ${f.message}`);
+        }
+      }
+      if (bad.some((s) => s.lint.some((f) => f.severity === 'error'))) process.exitCode = 1;
+      return;
+    }
+
+    case 'diff': {
+      if (!name) throw new SkmError('invalid', 'usage: skm diff <name>');
+      const d = await diffUpstream(opts, name);
+      if (flags.json) return console.log(JSON.stringify(d, null, 2));
+      printDiff(d);
+      return;
+    }
+
     case 'outdated': {
       const check = await checkUpdates(opts);
       if (flags.json) return console.log(JSON.stringify(check, null, 2));
@@ -244,6 +298,13 @@ async function main(argv, opts = {}) {
       if (plans.every((p) => !p.changes.length)) return report(plans[0], flags);
       if (!dryRun) {
         for (const p of plans) for (const ch of p.changes) console.log(`  ${ch}`);
+        if (process.stdin.isTTY && !flags.yes) {
+          for (const n of names) {
+            try {
+              console.log(`  diff ${n}: ${statLine((await diffUpstream(opts, n)).stats)}  (skm diff ${n} for details; local edits show as removals)`);
+            } catch {}
+          }
+        }
         const what = names.length === 1 ? names[0] : `${names.length} skills (${names.join(', ')})`;
         if (!(await confirm(`${what} will be replaced by the version from its source; the old version goes to the system Trash.\nContinue?`, flags))) return console.log('aborted');
       }
