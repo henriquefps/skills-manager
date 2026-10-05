@@ -76,7 +76,8 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - press **Check for updates** to see which tracked skills are outdated, and **Update** them one by one, with a diff of what will change;
 - see the **context cost** of every skill and the total for your active ones, and sort by it;
 - see **lint** findings per skill and filter by them;
-- open the **Projects** tab to browse the skills of all your projects.
+- open the **Projects** tab to browse the skills of all your projects;
+- mark skills as **favorites**, add **tags**, filter by them, and copy several skills into the project at once.
 
 Options: `--port <n>` picks the port (if it is taken, the next free one is used) and
 `--no-open` skips opening the browser.
@@ -99,6 +100,10 @@ skm update --all          [--force] [--dry-run] [--yes]   # only the ones with a
 skm diff <name>           [--json]   # installed vs upstream, before updating
 skm cost                  [--json] [--all]   # estimated context tokens of active skills
 skm lint [name]           [--json] [--all]   # check SKILL.md content; exit 1 on errors
+skm fav <name...>         |   skm unfav <name...>   # favorites
+skm tag <name> <tag...>   |   skm untag <name> <tag...>   |   skm tags
+skm list --fav            |   skm list --tag <tag>   # filters (FAV and TAGS columns)
+skm pull <name...>        # copy one or more global skills (inactive ones too) into this project
 skm projects              [--json]   # scan the configured project folders
 skm projects add <path>   |   skm projects rm <path>   |   skm projects depth <n>
 skm config                # show the config file path and content
@@ -132,6 +137,30 @@ file by file. The diff goes from your installed copy to upstream, so anything yo
 shows up as removed lines.
 
 ![skm: diff before updating](docs/img/screenshot-diff.png)
+
+## Favorites, tags and your skill library
+
+An inactive skill is not lost: it is a skill you keep switched off so it does not cost context, and
+copy into a project when you need it. **Copy to local** (and `skm pull`) works on inactive global skills
+too: the copy in the project is a real, active folder, and the global one stays inactive.
+
+To find those skills quickly, mark them with a star and add tags (lowercase letters, digits and
+hyphens, up to 8 per skill). In the UI, filter by **Favorites** or by tags (selecting several tags
+means all of them), turn on **Select skills**, **Select all visible** and **Copy to local** to bring
+a whole set into the project in one go. A skill that already exists there fails on its own and does
+not stop the others, unless you choose **Overwrite**.
+
+```sh
+skm fav cordova-plugins capacitor-app-checklist
+skm tag cordova-plugins mobile
+skm list --tag mobile
+skm pull cordova-plugins capacitor-app-checklist   # from inside the project
+```
+
+Favorites and tags are saved by skill name in `~/.config/skm/config.json`, next to the project
+folders, so they belong to your machine and never touch the skill folders.
+
+![skm: favorites, tags and batch copy](docs/img/screenshot-favorites.png)
 
 ## Context cost
 
