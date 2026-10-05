@@ -24,6 +24,7 @@ function mk(scope, name, status, description, extra = {}) {
 }
 
 let db = { global: [], local: [] };
+const remote = {}; // what the fake GitHub says about each tracked skill
 function seed() {
   const g = [
     mk('global', 'orca-cli', 'ok', 'Operate Orca-managed worktrees, terminals and the embedded browser from the public orca CLI.', { locations: [gAgents('orca-cli'), gLink('orca-cli')], files: 6, bytes: 24800 }),
@@ -47,6 +48,20 @@ function seed() {
     mk('local', 'db-migrations', 'ok', 'Write and verify SQL migrations for the Atlas Postgres schema.', { active: false, locations: [loc('claude', `${ROOT}/.claude/skills-inactive/db-migrations`)] }),
     mk('local', 'half-written', 'empty', '', { issues: ['Folder has no SKILL.md'], locations: [loc('claude', `${ROOT}/.claude/skills/half-written`)], files: 0, bytes: 0 }),
   ];
+  const org = (name, source, installedAt, modified = false, status = 'up-to-date', extra = {}) => {
+    const sk = g.find((x) => x.name === name);
+    sk.origin = { source, url: `https://github.com/${source}.git`, skillPath: `skills/${name}/SKILL.md`, installedAt, updatedAt: installedAt, modified };
+    remote[name] = { status, ...extra };
+  };
+  for (const sk of g) sk.origin = null;
+  for (const k of Object.keys(remote)) delete remote[k];
+  org('orca-cli', 'stablyai/orca', '2026-09-12T09:30:00.000Z');
+  org('wrangler', 'cloudflare/skills', '2026-07-02T14:10:00.000Z', false, 'update-available', { remoteHash: 'a41c9e0' });
+  org('linear-workflow', 'linear/agent-skills', '2026-08-19T08:00:00.000Z', false, 'update-available', { remoteHash: '7be02d1' });
+  org('build-a-saas', 'indie-kit/skills', '2026-06-23T02:43:28.718Z', true, 'update-available', { remoteHash: 'c0ffee3' });
+  org('adr-logger', 'henriquefps/agent-skills', '2026-05-30T17:20:00.000Z', true);
+  org('cordova-plugins', 'cordova-community/skills', '2026-04-11T11:00:00.000Z', false, 'removed-upstream');
+  org('outsystems-ui-js', 'outsystems/agent-skills', '2026-08-02T10:15:00.000Z', false, 'unreachable', { error: 'GitHub rate limit exceeded (resets in 41 min)' });
   db = { global: g, local: noProject ? [] : l };
   link();
 }
@@ -125,6 +140,22 @@ function act(d, b) {
       }
       return { body: { ok: true, message: `Copied ${s.name} to ${path.replace(ROOT, '.')}.`, changes: [`copy ${s.locations[0].path} -> ${path}`] } };
     }
+    case 'update': {
+      if (!g) return err('bad-scope', 'Update works on global skills only.', 400);
+      if (!s.origin) return err('not-tracked', `${s.name} has no recorded source, so it cannot be updated.`, 422);
+      const r = remote[s.name] || { status: 'up-to-date' };
+      if (r.status === 'removed-upstream') return err('removed-upstream', `${s.name} no longer exists in ${s.origin.source}.`, 422);
+      if (r.status === 'unreachable') return err('network', `Could not reach ${s.origin.source}: ${r.error}.`, 502);
+      if (s.origin.modified && !b.force) return err('modified', `${s.name} has local changes. Update again with force to replace them.`);
+      const changes = [`clone ${s.origin.url} (depth 1)`, `trash ${s.locations[0].path} -> ${HOME}/.Trash/${s.name}`,
+        `copy skills/${s.name} -> ${s.locations[0].path}`, `update ~/.agents/.skill-lock.json entry for ${s.name}`];
+      if (!b.dryRun) {
+        const now = new Date().toISOString();
+        s.origin = { ...s.origin, updatedAt: now, modified: false };
+        remote[s.name] = { status: 'up-to-date' };
+      }
+      return { body: { ok: true, message: `Updated ${s.name} from ${s.origin.source}. The old version is in the system Trash.`, changes } };
+    }
     case 'delete': {
       const changes = [`trash ${s.locations[0].path} -> ${HOME}/.Trash/${s.name}`];
       if (g) changes.push(`remove ${HOME}/.claude/skills/${s.name}`);
@@ -152,6 +183,13 @@ createServer(async (req, res) => {
         project: noProject ? null : { root: ROOT, name: 'atlas' },
         global: db.global, local: db.local,
       });
+    }
+    if (url.pathname === '/api/updates') {
+      await new Promise((r) => setTimeout(r, Number(process.env.MOCK_CHECK_MS || 1200)));
+      if (process.env.MOCK_CHECK_FAIL) return send(res, 502, { ok: false, error: 'Could not reach GitHub.', code: 'network' });
+      const results = {};
+      for (const sk of db.global) if (sk.origin) results[sk.name] = remote[sk.name] || { status: 'up-to-date' };
+      return send(res, 200, { checkedAt: new Date().toISOString(), results });
     }
     if (url.pathname === '/api/skill') {
       const s = find(url.searchParams.get('scope'), url.searchParams.get('name'));

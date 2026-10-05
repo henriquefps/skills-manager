@@ -22,9 +22,14 @@
       <h1 id="title">Skills</h1>
       <p class="deck" id="deck">Loading your skills.</p>
       <p class="cwd" id="cwd"></p>
+      <div class="checkbar" id="checkbar" hidden>
+        <button class="btn" type="button" id="check-btn" data-fk="check">Check for updates</button>
+        <p class="check-meta" id="check-meta" aria-live="polite"></p>
+      </div>
     </header>
 
     <section id="banner" class="banner" aria-live="polite" hidden></section>
+    <section id="updates-banner" class="banner updates" aria-live="polite" hidden></section>
 
     <section class="toolbar" aria-label="Find skills">
       <div class="tabs" role="tablist" aria-label="Scope">
