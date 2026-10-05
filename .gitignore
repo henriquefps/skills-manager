@@ -1,3 +1,6 @@
 node_modules/
 .DS_Store
 .claude/orchestration.local.json
+
+# screenshots from the UI mock (regenerate with the mock server)
+src/ui/mock/shots/

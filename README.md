@@ -73,7 +73,10 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - **Delete** (moves it to the system Trash), with a confirmation that shows the exact destination;
 - open **Details** to see the `SKILL.md` and the file tree;
 - use **Fix all** in the problems banner, with a preview of what will change;
-- press **Check for updates** to see which tracked skills are outdated, and **Update** them one by one.
+- press **Check for updates** to see which tracked skills are outdated, and **Update** them one by one, with a diff of what will change;
+- see the **context cost** of every skill and the total for your active ones, and sort by it;
+- see **lint** findings per skill and filter by them;
+- open the **Projects** tab to browse the skills of all your projects.
 
 Options: `--port <n>` picks the port (if it is taken, the next free one is used) and
 `--no-open` skips opening the browser.
@@ -93,6 +96,12 @@ skm delete <name>         [--local|--global]   # moves to the system Trash; rest
 skm outdated [--json]     check the GitHub source of each tracked global skill
 skm update <name>         [--force] [--dry-run] [--yes]
 skm update --all          [--force] [--dry-run] [--yes]   # only the ones with an update available
+skm diff <name>           [--json]   # installed vs upstream, before updating
+skm cost                  [--json] [--all]   # estimated context tokens of active skills
+skm lint [name]           [--json] [--all]   # check SKILL.md content; exit 1 on errors
+skm projects              [--json]   # scan the configured project folders
+skm projects add <path>   |   skm projects rm <path>   |   skm projects depth <n>
+skm config                # show the config file path and content
 ```
 
 General options: `--yes` (skip confirmation), `--dry-run` (only show what would happen),
@@ -117,6 +126,49 @@ when available, otherwise it is anonymous) and reports `up-to-date`, `update-ava
 Trash, copies the new one in place and updates the hash and `updatedAt` in the lock file; all other
 lock fields and its indentation are kept. A modified skill is refused unless you pass `--force`; an
 inactive skill is updated where it lives. Use `--dry-run` to see the plan first.
+
+Before you confirm, `skm diff <name>` (and the Update dialog in the UI) shows what will change,
+file by file. The diff goes from your installed copy to upstream, so anything you edited locally
+shows up as removed lines.
+
+![skm: diff before updating](docs/img/screenshot-diff.png)
+
+## Context cost
+
+Every active skill costs context in every session: the agent loads its `name` and `description`
+up front, and the whole `SKILL.md` only when the skill is used. `skm cost` lists the estimated
+tokens per skill (characters divided by 4, so an estimate, not an exact count) and the total for
+your active skills, so you can see which skills are worth their weight. `skm list` has a `TOK`
+column, and the UI shows a badge and a bar on each card, a total in the header, and a sort by cost.
+
+![skm: context cost](docs/img/screenshot-cost.png)
+
+## Lint
+
+`skm lint` checks the content of each `SKILL.md`: missing or broken frontmatter, a name that does not
+match the folder or is not a valid name, a missing, very short or very long description (over 1024
+characters), a description that never says when to use the skill, broken references to files in the
+folder, and very large files. Findings are `error`, `warn` or `info`; `skm lint` exits with 1 if there is
+any error, so you can use it in a script.
+
+## Projects
+
+Skills also live inside your projects. skm does not scan anything by default: tell it where your
+projects are, and it looks (up to a depth you choose, 3 by default) for folders with
+`.agents/skills` or `.claude/skills`:
+
+```sh
+skm projects add ~/code
+skm projects add ~/Documents
+skm projects
+```
+
+The settings are saved in `~/.config/skm/config.json`. In the UI, the **Projects** tab lists the found
+projects with their skills, costs and statuses, lets you promote a project skill to global or copy a
+global one into a project, and flags **repeated skills**: the same skill name in two or more projects,
+marked identical or diverged, and whether it already exists in global. That is the hint to promote it.
+
+![skm: projects](docs/img/screenshot-projects.png)
 
 ## Recipes
 
