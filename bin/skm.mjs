@@ -253,7 +253,7 @@ function printSheet(p) {
   row('tags', p.meta.tags.join(', ') || '-');
   row('status', projectStatus(p));
   row('notes', p.meta.notes || '-');
-  row('skills', `${active.length} active${active.length < p.skills.length ? `, ${p.skills.length - active.length} inactive` : ''} (~${active.reduce((n, s) => n + s.cost.listing, 0)} tokens listed)`);
+  row('skills', !p.skills.length ? 'none' : `${active.length} active${active.length < p.skills.length ? `, ${p.skills.length - active.length} inactive` : ''} (~${active.reduce((n, s) => n + s.cost.listing, 0)} tokens listed)`);
   for (const s of p.skills) console.log(`  ${s.active ? s.name : c.dim(`${s.name} (inactive)`)}  ${c.dim(`${s.cost.listing} tok`)}`);
 }
 
@@ -326,7 +326,7 @@ async function projectsCommand(opts, [sub, arg, ...more], flags) {
   if (flags.json) return console.log(JSON.stringify(flags.brief ? projects.map(brief) : { ...scan, projects }, null, 2));
   if (!scan.roots.length) return console.log('no project roots configured: add one with `skm projects add <path>`');
   console.log(c.dim(`roots: ${scan.roots.join(', ')} (depth ${cfg.scanDepth})`));
-  if (!projects.length) return console.log(scan.projects.length ? 'only archived projects found: use --all' : 'no projects with skills found');
+  if (!projects.length) return console.log(scan.projects.length ? 'only archived projects found: use --all' : 'no projects found');
   console.log(projectsTable(projects));
   if (scan.repeated.length) {
     console.log(`\n${c.bold('Repeated skills')}`);

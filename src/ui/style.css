@@ -638,6 +638,7 @@ body.has-bar .toasts { bottom: 96px; }
 .pfact b { color: var(--fg); font-weight: 600; }
 .pfact.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
 .card.project.archived { opacity: 0.8; }
+.card.project .noskills { margin: 0; color: var(--muted-fg); font-style: italic; }
 
 .pedit { gap: 20px; }
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }

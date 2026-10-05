@@ -39,7 +39,7 @@ export function resolveContext(opts = {}) {
   const env = opts.env ?? process.env;
   const home = path.resolve(opts.home ?? env.SKM_HOME ?? os.homedir());
   const cwd = path.resolve(opts.cwd ?? process.cwd());
-  const root = findProjectRoot(cwd, home);
+  const root = opts.projectRoot ? path.resolve(opts.projectRoot) : findProjectRoot(cwd, home);
   return {
     resolved: true,
     home,

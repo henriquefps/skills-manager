@@ -77,6 +77,7 @@
     selecting: false, // multi-select mode (Global tab only)
     selected: new Set(), // skill names picked for the batch copy
     ptags: new Set(), // project tag filter (Projects tab), AND semantics
+    onlyWithSkills: false, // Projects tab: hide projects that have no skills yet
     showArchived: false, // Projects tab: archived projects are hidden until asked for
   };
 
@@ -1195,7 +1196,7 @@
         shown.length
           ? h('div', { class: 'pgrid' }, shown.map(projectCard))
           : h('div', { class: 'empty-state' }, h('h2', { text: pr.projects.length ? 'No matching projects' : 'No projects found' }),
-            h('p', { text: pr.projects.length ? `Try a different search, or clear the tag filters${hidden ? ' and show archived projects' : ''}.` : `Nothing with skills was found within ${cfg.scanDepth} ${cfg.scanDepth === 1 ? 'level' : 'levels'} of your folders. Add another folder or increase the depth.` }))),
+            h('p', { text: pr.projects.length ? `Try a different search, or clear the tag filters${hidden ? ' and show archived projects' : ''}.` : `No projects were found within ${cfg.scanDepth} ${cfg.scanDepth === 1 ? 'level' : 'levels'} of your folders. Add another folder or increase the depth.` }))),
       repeatedPanel(pr)));
   }
 
@@ -1231,7 +1232,8 @@
   }
 
   /** Projects that pass the status filter (archived hidden by default). */
-  const eligibleProjects = () => (state.projects ? state.projects.projects.filter((p) => state.showArchived || !isArchived(p)) : []);
+  const statusEligible = () => (state.projects ? state.projects.projects.filter((p) => state.showArchived || !isArchived(p)) : []);
+  const eligibleProjects = () => statusEligible().filter((p) => !state.onlyWithSkills || p.skills.length);
 
   function visibleProjects() {
     return eligibleProjects()
@@ -1248,10 +1250,17 @@
   function renderProjectChips(box) {
     box.setAttribute('aria-label', 'Filter projects by status');
     const n = state.projects ? state.projects.projects.filter(isArchived).length : 0;
-    box.replaceChildren(...(n || state.showArchived ? [h('button', {
-      class: 'chip', type: 'button', 'aria-pressed': String(state.showArchived), 'data-fk': 'chip:archived',
-      onclick: () => { state.showArchived = !state.showArchived; render(); },
-    }, 'Show archived ', h('span', { class: 'n', text: n }))] : []));
+    const empty = statusEligible().filter((p) => !p.skills.length).length;
+    box.replaceChildren(
+      ...(n || state.showArchived ? [h('button', {
+        class: 'chip', type: 'button', 'aria-pressed': String(state.showArchived), 'data-fk': 'chip:archived',
+        onclick: () => { state.showArchived = !state.showArchived; render(); },
+      }, 'Show archived ', h('span', { class: 'n', text: n }))] : []),
+      ...(empty || state.onlyWithSkills ? [h('button', {
+        class: 'chip', type: 'button', 'aria-pressed': String(state.onlyWithSkills), 'data-fk': 'chip:with-skills',
+        title: 'Hide projects that have no skills yet',
+        onclick: () => { state.onlyWithSkills = !state.onlyWithSkills; render(); },
+      }, 'Only with skills ', h('span', { class: 'n', text: statusEligible().length - empty }))] : []));
   }
 
   function projectDescription(p) {
@@ -1292,11 +1301,13 @@
         h('div', { class: 'card-id' },
           h('h3', { class: 'name', id: `pn-${p.root}`, text: p.name }),
           h('span', { class: 'meta mono', title: p.root, text: shortPath(p.root) })),
-        h('span', { class: 'meta', text: `${active.length}/${p.skills.length} active, ~${fmtTok(tokens)} tok` })),
+        p.skills.length ? h('span', { class: 'meta', text: `${active.length}/${p.skills.length} active, ~${fmtTok(tokens)} tok` }) : null),
       projectDescription(p),
       chips.length ? h('div', { class: 'pchips' }, chips) : null,
       projectFacts(p),
-      h('ul', { class: 'prows' }, p.skills.map((k) => projectSkillRow(p, k, maxCost))),
+      p.skills.length
+        ? h('ul', { class: 'prows' }, p.skills.map((k) => projectSkillRow(p, k, maxCost)))
+        : h('p', { class: 'meta noskills', text: 'No skills here yet' }),
       h('div', { class: 'card-foot' },
         h('span', { class: 'meta', text: `${p.skills.length} ${p.skills.length === 1 ? 'skill' : 'skills'}` }),
         h('div', { class: 'actions' },

@@ -74,11 +74,11 @@ test('config: validation', () => {
 test('scan: depth, skip rules, never descends into a found project', async () => {
   const { home, ws } = build();
   const scan = async (scanDepth) => await scanProjects({ home }, { projectRoots: [ws], scanDepth });
-  assert.deepEqual(names(await scan(1)), ['a']);
-  assert.deepEqual(names(await scan(2)), ['a', 'group/b', 'real/viaLink']);
-  assert.deepEqual(names(await scan(4)), ['a', 'group/b', 'group/deep/deeper/c', 'real/viaLink']);
+  assert.deepEqual(names(await scan(1)), ['a', 'noskills']);
+  assert.deepEqual(names(await scan(2)), ['a', 'group/b', 'noskills', 'real/viaLink']);
+  assert.deepEqual(names(await scan(4)), ['a', 'group/b', 'group/deep/deeper/c', 'noskills', 'real/viaLink']);
   const all = names(await scan(6));
-  assert.ok(!all.some((n) => /node_modules|\.hidden|nested|noskills|linkdir/.test(n)), all.join());
+  assert.ok(!all.some((n) => /node_modules|\.hidden|nested|linkdir/.test(n)), all.join());
   const a = (await scan(1)).projects[0];
   assert.deepEqual(a.skills.map((s) => s.name), ['one', 'shared']);
   assert.deepEqual(Object.keys(a.skills[0]), ['name', 'active', 'status', 'cost', 'meta']);
@@ -186,7 +186,7 @@ test('server: /api/config, /api/projects, projectRoot on /api/action', async () 
   const put = await call('/api/config', json('PUT', { projectRoots: [ws], scanDepth: 2 }));
   assert.deepEqual(put.body, { projectRoots: [ws], scanDepth: 2 });
   const { body } = await call('/api/projects');
-  assert.deepEqual(body.projects.map((p) => p.name), ['a', 'b', 'viaLink']);
+  assert.deepEqual(body.projects.map((p) => p.name), ['a', 'b', 'noskills', 'viaLink']);
   assert.deepEqual(body.repeated.map((r) => [r.name, r.identical]), [['shared', true]]);
 
   const target = path.join(ws, 'a');
@@ -220,9 +220,80 @@ test('cli: projects add/rm/depth/config and scan output', () => {
   assert.match(out, /group\/b|\bb\b/);
   assert.match(out, /shared\s+identical/);
   const json = JSON.parse(skm(home, home, ['projects', '--json']).stdout);
-  assert.equal(json.projects.length, 3);
+  assert.equal(json.projects.length, 4);
   assert.match(skm(home, home, ['config']).stdout, /"scanDepth": 2/);
   assert.equal(skm(home, home, ['projects', 'rm', path.join(ws, 'nope')]).status, 1);
   assert.equal(skm(home, home, ['projects', 'rm', ws]).status, 0);
   assert.deepEqual(readConfig({ home }).projectRoots, []);
+});
+
+const touch = (dir, file = 'x') => {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, file), '');
+  return dir;
+};
+const scanOf = async (home, root, scanDepth = 3) => await scanProjects({ home }, { projectRoots: [root], scanDepth });
+
+test('scan: zero-skill projects: git dir, worktree .git file, each marker group', async () => {
+  const home = tmp();
+  const ws = tmp();
+  const git = path.join(ws, 'gitonly');
+  spawnSync('git', ['init', '-q', git]);
+  touch(path.join(ws, 'wt'), '.git'); // worktree-style: .git is a file
+  const markers = ['package.json', 'pyproject.toml', 'requirements.txt', 'Cargo.toml', 'go.mod', 'config.xml', 'plugin.xml', 'Package.swift', 'build.gradle', 'build.gradle.kts', 'pubspec.yaml', 'App.xcodeproj', 'App.csproj', 'App.sln', 'App.oml', 'App.oap'];
+  markers.forEach((m, i) => touch(path.join(ws, `m${i}`), m));
+  const scan = await scanOf(home, ws);
+  assert.deepEqual(names(scan), ['gitonly', ...markers.map((_, i) => `m${i}`), 'wt'].sort());
+  for (const p of scan.projects) assert.deepEqual(p.skills, []);
+  assert.deepEqual(scan.repeated, []);
+});
+
+test('scan: containers without markers are skipped, children found; nested in a found project is not listed', async () => {
+  const home = tmp();
+  const ws = tmp();
+  touch(path.join(ws, 'container', 'kid1'), 'package.json');
+  touch(path.join(ws, 'container', 'kid2'), 'go.mod');
+  touch(path.join(ws, 'container', 'notes'), 'readme.txt'); // no marker: not a project
+  touch(path.join(ws, 'app'), 'package.json');
+  touch(path.join(ws, 'app', 'packages', 'inner'), 'package.json'); // never descends into a found project
+  touch(path.join(ws, 'node_modules', 'dep'), 'package.json');
+  assert.deepEqual(names(await scanOf(home, ws)), ['app', 'container/kid1', 'container/kid2']);
+  assert.deepEqual(names(await scanOf(home, ws, 1)), ['app']);
+  const home2 = tmp();
+  touch(path.join(home2, 'proj'), 'package.json');
+  assert.deepEqual((await scanOf(home2, home2)).projects.map((p) => p.name), ['proj']); // home itself never a project
+});
+
+test('scan: skills-only project (no git, no marker) still listed; zero-skill project works with find, show, set and the API', async () => {
+  const home = tmp();
+  const ws = tmp();
+  mkSkill(path.join(ws, 'skillsonly', '.claude', 'skills'), 'one');
+  touch(path.join(ws, 'empty'), 'package.json');
+  assert.deepEqual(names(await scanOf(home, ws)), ['empty', 'skillsonly']);
+  const empty = path.join(ws, 'empty');
+  writeConfig({ home }, { projectRoots: [ws], scanDepth: 2 });
+
+  const ctx = projectContext({ home }, empty); // marker-only: accepted as a project
+  assert.equal(ctx.project.root, empty);
+  assert.throws(() => projectContext({ home }, path.join(ws)), (e) => e.code === 'no-project');
+
+  const server = await startServer({ home, cwd: home, port: 0 });
+  after(() => server.close());
+  const get = async (u) => await (await fetch(server.url + u)).json();
+  const body = await get('/api/projects');
+  const e = body.projects.find((p) => p.name === 'empty');
+  assert.deepEqual(Object.keys(e), ['root', 'name', 'meta', 'auto', 'skills']);
+  assert.deepEqual(e.skills, []);
+  assert.deepEqual((await get('/api/projects?q=empty')).projects.map((p) => p.name), ['empty']);
+
+  const run = (args) => spawnSync(process.execPath, [BIN, ...args], { env: { ...process.env, SKM_HOME: home, NO_COLOR: '1', FORCE_COLOR: undefined }, cwd: home, encoding: 'utf8' });
+  const set = run(['projects', 'set', 'empty', '--desc', 'a zero skill project', '--tags', 'x']);
+  assert.equal(set.status, 0, set.stderr);
+  const find = JSON.parse(run(['projects', 'find', 'zero', '--json']).stdout);
+  assert.deepEqual(find.map((p) => p.name), ['empty']);
+  const show = run(['projects', 'show', 'empty']);
+  assert.equal(show.status, 0, show.stderr);
+  assert.match(show.stdout, /skills\s+none/);
+  assert.match(show.stdout, /a zero skill project/);
+  assert.equal(JSON.parse(run(['projects', '--brief', '--json']).stdout).length, 2);
 });

@@ -256,15 +256,25 @@ before the confirmation.
 
 Config file `<home>/.config/skm/config.json`, created only when the user changes something:
 `{ "projectRoots": ["~/orca/projects", "~/Documents"], "scanDepth": 3 }` (`~` expanded at read time, defaults:
-no roots, depth 3). The scan looks, under each root up to `scanDepth` levels, for directories that contain
-`.agents/skills` or `.claude/skills` with at least one skill; it skips `node_modules`, `.git`, `.Trash`, dot
-folders (except the `.agents`/`.claude` it looks for), does not follow symlinked directories and never
-descends into a found project. No roots configured means the Projects view asks the user to add some;
+no roots, depth 3). The scan looks, under each root up to `scanDepth` levels, for projects. A directory is a
+project if **any** of these holds: it has a `.git` entry (directory or file, so worktrees count); it has
+`.agents/skills` or `.claude/skills` with at least one skill; or it has a strong single-project marker file:
+`package.json`, `pyproject.toml`, `requirements.txt`, `Cargo.toml`, `go.mod`, `config.xml`, `plugin.xml`,
+`Package.swift`, `pubspec.yaml`, `build.gradle`, `build.gradle.kts`, or any `*.xcodeproj`, `*.csproj`, `*.sln`, `*.oml`, `*.oap`.
+Markers are included because the scan feeds the project index (below): an agent must be able to find a project
+even when it has no skills yet and no git repository, so a project with zero skills still appears (`skills: []`)
+in `skm projects`, `find`, `show`, `set`, `GET /api/projects` and the Projects tab. `pubspec.yaml` (Flutter) is there
+because otherwise the `android/`, `ios/` and `macos/` folders of a Flutter app are listed as separate projects.
+The scan skips `node_modules`, `.git`, `.Trash`, dot folders, does not follow symlinked directories, never
+descends into a found project and never treats the home directory itself as a project. A folder with none of the
+above (a plain container) is not listed, but its children are examined. Known limit: a container folder with a stray
+`package.json` (or a `.git`) counts as one project and hides the real projects below it. No roots configured means
+the Projects view asks the user to add some;
 nothing is scanned by default.
 
 `GET /api/config` -> `{ "projectRoots": [...], "scanDepth": 3 }`;
 `PUT /api/config` body same shape (validates: array of existing directories, depth 1..6) -> same shape or 4xx JSON error.
-`GET /api/projects` ->
+`GET /api/projects` (a project without skills has `"skills": []`) ->
 ```json
 { "roots": ["/Users/me/orca/projects"],
   "projects": [ { "root": "/Users/me/orca/projects/foo", "name": "foo",
@@ -330,7 +340,7 @@ Two layers: **auto** facts computed on every scan (never stored) and **meta** wr
 keyed by **absolute project path**. Same preservation rule as everything else in that file (never drop other keys).
 Rules: `description` <= 300 chars, `notes` <= 2000, `status` one of `active | paused | archived`, tags follow the skill tag rules
 (lowercase `[a-z0-9-]`, 1..24 chars, max 8, sorted, de-duplicated). Entries that end up empty are removed. Setting meta requires
-the path to exist and to be a found project (inside a configured root) or the current project.
+the path to exist and to be a found project (inside a configured root, with or without skills, see the scan rule above) or the current project.
 
 ### Auto facts (computed, injectable `git` runner, every call best effort, short timeouts, failures leave the field absent)
 

@@ -125,6 +125,9 @@ function seedProjects() {
   ];
   const O = '/Users/demo/Documents/old-prototype';
   pdb[O] = [at(O, 'sketch-helper', 'ok', 'Quick sketching helpers for the abandoned prototype.')];
+  pdb['/Users/demo/code/scratch-git'] = []; // git only
+  pdb['/Users/demo/Documents/cordova-shell'] = []; // marker only (config.xml)
+  pdb['/Users/demo/Documents/dotnet-tools'] = []; // marker only (*.csproj)
   pdb[N] = [
     at(N, 'release-notes', 'ok', 'Draft release notes from merged pull requests. Use when cutting a release.'),
     at(N, 'api-conventions', 'diverged', 'REST naming, pagination and error shape for notes-api. Use when adding an endpoint.', { issues: ['agents and claude copies differ'] }),
@@ -138,6 +141,9 @@ const pmetaSeed = {
   '/Users/demo/code/ledger': { description: '', tags: ['finance', 'work'], status: 'paused', notes: 'Waiting on the new accounting provider API before resuming.' },
   '/Users/demo/code/pixel-site': { description: 'Marketing site for Pixel, built with Vite and Tailwind and deployed on Cloudflare.', tags: ['design', 'saas'], status: '', notes: '' },
   '/Users/demo/Documents/notes-api': { description: '', tags: [], status: '', notes: '' },
+  '/Users/demo/code/scratch-git': { description: '', tags: [], status: '', notes: '' },
+  '/Users/demo/Documents/cordova-shell': { description: 'Empty Cordova shell to try plugins in.', tags: ['mobile'], status: '', notes: '' },
+  '/Users/demo/Documents/dotnet-tools': { description: '', tags: [], status: '', notes: '' },
   '/Users/demo/Documents/old-prototype': { description: 'Early prototype of the mobile app, kept for reference only.', tags: ['mobile'], status: 'archived', notes: '' },
 };
 const pauto = {
@@ -145,6 +151,9 @@ const pauto = {
   '/Users/demo/code/ledger': { remote: 'gitlab.com/demo-team/ledger', branch: 'feature/import-csv', lastCommitAt: daysAgo(34), stack: ['python'], readme: 'Double-entry ledger with CSV import and monthly reports.' },
   '/Users/demo/code/pixel-site': { remote: 'github.com/demo/pixel-site', branch: 'main', lastCommitAt: daysAgo(3), stack: ['node', 'shadcn', 'tailwind', 'vite'], readme: 'Static marketing site.' },
   '/Users/demo/Documents/notes-api': { branch: 'main', lastCommitAt: daysAgo(190), stack: ['express', 'node'], readme: 'REST API that stores and searches personal notes, with token auth and full-text search over every note body.' },
+  '/Users/demo/code/scratch-git': { branch: 'main', lastCommitAt: daysAgo(12) },
+  '/Users/demo/Documents/cordova-shell': { stack: ['cordova'] },
+  '/Users/demo/Documents/dotnet-tools': { stack: ['dotnet'] },
   '/Users/demo/Documents/old-prototype': { remote: 'github.com/demo/old-prototype', branch: 'master', lastCommitAt: daysAgo(560), stack: ['capacitor', 'cordova'] },
 };
 const pmeta = {};
@@ -200,7 +209,7 @@ const localList = (root) => (!root || root === ROOT ? db.local : pdb[root]);
 function setLocalList(root, arr) { if (!root || root === ROOT) db.local = arr; else pdb[root] = arr; }
 
 function projectsPayload() {
-  const projects = visibleProjects().filter((p) => p.list.length).map((p) => ({
+  const projects = visibleProjects().map((p) => ({
     root: p.root, name: p.name, meta: metaForProject(p.root), auto: pauto[p.root] || {},
     skills: p.list.map((x) => ({ name: x.name, active: x.active, status: x.status, cost: x.cost, meta: metaOf(x.name) })),
   }));

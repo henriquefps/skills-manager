@@ -9,6 +9,20 @@ import { scanScope } from './scan.mjs';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.Trash']);
 
+/** Files that mark a folder as one project even without git or skills. */
+const MARKER_FILES = new Set(['package.json', 'pyproject.toml', 'requirements.txt', 'Cargo.toml', 'go.mod', 'config.xml', 'plugin.xml', 'Package.swift', 'build.gradle', 'build.gradle.kts', 'pubspec.yaml']);
+const MARKER_EXTS = ['.xcodeproj', '.csproj', '.sln', '.oml', '.oap'];
+const isMarker = (name) => MARKER_FILES.has(name) || MARKER_EXTS.some((x) => name.endsWith(x));
+
+/** Does `dir` hold a project marker file (see MARKER_FILES / MARKER_EXTS)? */
+function hasMarker(dir) {
+  try {
+    return fs.readdirSync(dir).some(isMarker);
+  } catch {
+    return false;
+  }
+}
+
 const inside = (dir, root) => dir === root || dir.startsWith(root + path.sep);
 
 /** Token estimate for one skill, `ceil(chars / 4)`. Single place to swap for the shared cost module. */
@@ -27,20 +41,21 @@ export function skillCost(skill) {
 }
 
 /** A context whose local scope is the project at `root` (`cwd` = root, so its markers are found). */
-const projectCtx = (ctx, root) => resolveContext({ ...ctx, resolved: false, cwd: root });
+const projectCtx = (ctx, root) => resolveContext({ ...ctx, resolved: false, cwd: root, projectRoot: root });
 
-/** Directories (not symlinks) that hold skills, below `root` up to `depth` levels; never descends into a found project. */
+/**
+ * Projects (not symlinked dirs) below `root` up to `depth` levels; never descends into a found project. A folder is a
+ * project when it has a `.git` entry (dir or file), skills in `.agents/skills` or `.claude/skills`, or a marker file.
+ */
 function findProjects(ctx, root, depth) {
   const found = [];
   const visit = (dir, level) => {
     if (dir !== ctx.home) {
       const pctx = projectCtx(ctx, dir);
-      if (pctx.project?.root === dir) {
-        const skills = scanScope(pctx, 'local');
-        if (skills.length) {
-          found.push({ root: dir, name: path.basename(dir), skills, ctx: pctx });
-          return;
-        }
+      const skills = scanScope(pctx, 'local');
+      if (skills.length || fs.existsSync(path.join(dir, '.git')) || hasMarker(dir)) {
+        found.push({ root: dir, name: path.basename(dir), skills, ctx: pctx });
+        return;
       }
     }
     if (level >= depth) return;
@@ -136,7 +151,8 @@ export function projectContext(opts, projectRoot) {
       allowed.push(fs.realpathSync(r));
     } catch {}
   }
-  const pctx = projectCtx(ctx, real);
+  let pctx = resolveContext({ ...ctx, resolved: false, cwd: real });
+  if (!pctx.project && hasMarker(real)) pctx = projectCtx(ctx, real);
   const proj = pctx.project?.root;
   if (!proj) throw new SkmError('no-project', `not a project: ${projectRoot}`);
   if (!allowed.some((r) => inside(proj, r))) throw new SkmError('forbidden', `projectRoot is outside the configured project roots: ${projectRoot}`);
