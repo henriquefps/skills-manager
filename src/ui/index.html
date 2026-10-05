@@ -39,7 +39,7 @@
         <button class="tab" role="tab" id="tab-projects" aria-controls="list" aria-selected="false" data-scope="projects" type="button" tabindex="-1">Projects <span class="count" id="count-projects" hidden>0</span></button>
       </div>
       <div class="search">
-        <label class="sr" for="search">Search skills by name or description</label>
+        <label class="sr" for="search">Search skills by name, description or tag</label>
         <input id="search" type="search" placeholder="Search skills" autocomplete="off" spellcheck="false">
         <kbd aria-hidden="true">/</kbd>
       </div>
@@ -49,11 +49,16 @@
           <option value="name">Name</option>
           <option value="cost">Context cost (high to low)</option>
         </select>
+        <button class="btn" type="button" id="select-toggle" aria-pressed="false" hidden>Select skills</button>
       </div>
       <div class="chips" id="chips" role="group" aria-label="Filter by status"></div>
+      <div class="tagbar" id="tagbar" role="group" aria-labelledby="tagbar-label" hidden></div>
+      <datalist id="tag-suggest"></datalist>
     </section>
 
     <main id="list" class="list" role="tabpanel" aria-labelledby="tab-global" tabindex="-1"></main>
+
+    <div id="actionbar" class="actionbar" role="region" aria-label="Selection actions" hidden></div>
   </div>
 
   <dialog id="drawer" class="drawer" aria-labelledby="drawer-title"></dialog>
@@ -74,6 +79,8 @@
       </div>
     </form>
   </dialog>
+
+  <dialog id="results" class="modal" aria-labelledby="results-title"></dialog>
 
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 

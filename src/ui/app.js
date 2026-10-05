@@ -33,7 +33,14 @@
     projectsLoading: false,
     projectsError: null,
     rootDraft: '',
+    favOnly: false,
+    tags: new Set(), // tag filter, AND semantics
+    selecting: false, // multi-select mode (Global tab only)
+    selected: new Set(), // skill names picked for the batch copy
   };
+
+  const TAG_RE = /^[a-z0-9-]{1,24}$/;
+  const MAX_TAGS = 8;
 
   const SCOPES = ['global', 'local', 'projects'];
   const SEVERITY = { error: { label: 'error', one: 'error', many: 'errors', tone: 'bad' }, warn: { label: 'warn', one: 'warning', many: 'warnings', tone: 'warn' }, info: { label: 'info', one: 'note', many: 'notes', tone: 'info' } };
@@ -105,6 +112,7 @@
     if (!res.ok || (json && json.ok === false)) {
       throw Object.assign(new Error((json && json.error) || `Request failed (${res.status}).`), {
         code: json && json.code,
+        body: json,
       });
     }
     return json;
@@ -155,7 +163,10 @@
     renderUpdatesBanner();
     renderTabs();
     renderChips();
+    renderTagbar();
+    renderSelectToggle();
     renderList();
+    renderActionBar();
     if (focusKey) {
       const el = document.querySelector(`[data-fk="${CSS.escape(focusKey)}"]`);
       if (el) el.focus();
@@ -341,16 +352,81 @@
     return true;
   }
 
+  const metaOf = (s) => s.meta || { favorite: false, tags: [] };
+  const matchesMeta = (s) => (!state.favOnly || metaOf(s).favorite) && [...state.tags].every((t) => metaOf(s).tags.includes(t));
+
+  function favCount() {
+    const d = state.data;
+    if (d && typeof d.favorites === 'number') return d.favorites;
+    return new Set([...skillsOf('global'), ...skillsOf('local')].filter((s) => metaOf(s).favorite).map((s) => s.name)).size;
+  }
+
+  function tagList() {
+    const d = state.data;
+    if (d && Array.isArray(d.tags)) return d.tags;
+    const counts = new Map();
+    const seen = new Set();
+    for (const s of [...skillsOf('global'), ...skillsOf('local')]) {
+      if (seen.has(s.name)) continue;
+      seen.add(s.name);
+      for (const t of metaOf(s).tags) counts.set(t, (counts.get(t) || 0) + 1);
+    }
+    return [...counts].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  }
+
   function renderChips() {
     const box = $('#chips');
     const defs = chipDefs(skillsOf(state.scope));
     const cur = defs.find((c) => c.id === state.filter);
     if (!cur || (state.filter === 'update' && !cur.n)) state.filter = 'all';
-    box.replaceChildren(...defs.map((c) =>
+    const chips = defs.map((c) =>
       h('button', {
         class: 'chip', type: 'button', 'aria-pressed': String(c.id === state.filter), 'data-fk': `chip:${c.id}`,
         onclick: () => { state.filter = c.id; render(); },
-      }, c.label, ' ', h('span', { class: 'n', text: c.n }))));
+      }, c.label, ' ', h('span', { class: 'n', text: c.n })));
+    // Favorites is a toggle that combines with the status chips, not one of the exclusive choices.
+    chips.splice(1, 0, h('button', {
+      class: 'chip fav', type: 'button', 'aria-pressed': String(state.favOnly), 'data-fk': 'chip:fav',
+      onclick: () => { state.favOnly = !state.favOnly; render(); },
+    }, starIcon(state.favOnly), 'Favorites ', h('span', { class: 'n', text: favCount() })));
+    box.replaceChildren(...chips);
+  }
+
+  function renderTagbar() {
+    const box = $('#tagbar');
+    const tags = tagList();
+    for (const t of [...state.tags]) if (!tags.some((x) => x.tag === t)) state.tags.delete(t);
+    $('#tag-suggest').replaceChildren(...tags.map((t) => h('option', { value: t.tag })));
+    box.hidden = !state.data || state.scope === 'projects' || !tags.length;
+    if (box.hidden) return;
+    box.replaceChildren(...[
+      h('span', { class: 'tagbar-label', id: 'tagbar-label', text: 'Tags' }),
+      ...tags.map((t) => h('button', {
+        class: 'chip tagchip', type: 'button', 'aria-pressed': String(state.tags.has(t.tag)), 'data-fk': `tf:${t.tag}`,
+        onclick: () => { if (state.tags.has(t.tag)) state.tags.delete(t.tag); else state.tags.add(t.tag); render(); },
+      }, t.tag, ' ', h('span', { class: 'n', text: t.count }))),
+      state.tags.size
+        ? h('button', { class: 'btn small ghost', type: 'button', 'data-fk': 'tf-clear', text: 'Clear tags', onclick: () => { state.tags.clear(); render(); } })
+        : null,
+      state.tags.size > 1 ? h('span', { class: 'meta', text: 'Showing skills that have all of these tags.' }) : null].filter(Boolean));
+  }
+
+  function renderSelectToggle() {
+    const btn = $('#select-toggle');
+    const can = !!state.data && state.scope === 'global' && !!state.data.project;
+    btn.hidden = !can;
+    if (!can && state.selecting) { state.selecting = false; state.selected.clear(); }
+    btn.setAttribute('aria-pressed', String(state.selecting));
+    btn.textContent = state.selecting ? 'Done selecting' : 'Select skills';
+  }
+
+  function visibleSkills() {
+    const q = state.q.trim().toLowerCase();
+    return skillsOf(state.scope)
+      .filter(matchesFilter)
+      .filter(matchesMeta)
+      .filter((s) => !q || s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q) || metaOf(s).tags.some((t) => t.includes(q)))
+      .sort((a, b) => (state.sort === 'cost' ? costOf(b) - costOf(a) : 0) || a.name.localeCompare(b.name));
   }
 
   function renderList() {
@@ -367,15 +443,11 @@
       return;
     }
     const all = skillsOf(state.scope);
-    const q = state.q.trim().toLowerCase();
-    const shown = all
-      .filter(matchesFilter)
-      .filter((s) => !q || s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q))
-      .sort((a, b) => (state.sort === 'cost' ? costOf(b) - costOf(a) : 0) || a.name.localeCompare(b.name));
+    const shown = visibleSkills();
     const maxCost = Math.max(1, ...all.map(costOf));
     if (!shown.length) {
       list.append(all.length
-        ? emptyState('No matching skills', 'Try a different search or clear the status filter.')
+        ? emptyState('No matching skills', 'Try a different search, or clear the status, favorites and tag filters.')
         : emptyState(state.scope === 'local' ? 'No local skills yet' : 'No global skills yet',
           state.scope === 'local'
             ? 'Copy a global skill into this project to see it here.'
@@ -444,14 +516,114 @@
         `${c[sv]} ${SEVERITY[sv].label}`));
   }
 
+  function starIcon(on) {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', `star${on ? ' on' : ''}`);
+    svg.setAttribute('aria-hidden', 'true');
+    const p = document.createElementNS(ns, 'polygon');
+    p.setAttribute('points', '12 2.5 14.94 8.46 21.5 9.41 16.75 14.04 17.88 20.57 12 17.48 6.12 20.57 7.25 14.04 2.5 9.41 9.06 8.46');
+    svg.append(p);
+    return svg;
+  }
+
+  function xIcon() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 12 12');
+    svg.setAttribute('class', 'xicon');
+    svg.setAttribute('aria-hidden', 'true');
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', 'M3 3l6 6M9 3l-6 6');
+    svg.append(p);
+    return svg;
+  }
+
+  function favButton(s) {
+    const on = metaOf(s).favorite;
+    return h('button', {
+      class: 'star-btn', type: 'button', 'aria-pressed': String(on), 'data-fk': `fav:${key(s)}`,
+      'aria-label': `Favorite ${s.name}`, title: on ? 'Favorite. Click to remove.' : 'Mark as favorite.',
+      onclick: async () => { const e = await setMeta(s, { favorite: !on }); if (e) toast(e, 'error'); },
+    }, starIcon(on));
+  }
+
+  /** Writes favorite/tags for a skill name, then reloads. Resolves with an error message or null. */
+  async function setMeta(s, body) {
+    try {
+      await api('/api/meta', { name: s.name, ...body });
+    } catch (e) {
+      return e.message;
+    }
+    await refresh();
+    return null;
+  }
+
+  function tagError(s, raw, tags) {
+    const t = raw.trim().toLowerCase().replace(/^#/, '');
+    if (!t) return { error: 'Type a tag first.' };
+    if (!TAG_RE.test(t)) return { error: 'Tags use 1 to 24 characters: lowercase letters, digits and hyphens.' };
+    if (tags.includes(t)) return { error: `Already tagged ${t}.` };
+    if (tags.length >= MAX_TAGS) return { error: `A skill can have at most ${MAX_TAGS} tags.` };
+    return { tag: t };
+  }
+
+  function tagsBlock(s) {
+    const k = key(s);
+    const tags = metaOf(s).tags;
+    const err = h('p', { class: 'tag-err', id: `te-${k}`, role: 'alert', hidden: true });
+    const input = h('input', {
+      type: 'text', class: 'tag-input', id: `ti-${k}`, name: 'tag', list: 'tag-suggest', placeholder: 'Add tag', autocomplete: 'off', spellcheck: 'false',
+      maxlength: '40', 'aria-label': `Add a tag to ${s.name}`, 'aria-describedby': err.id, 'data-fk': `tag:${k}`,
+    });
+    const showErr = (msg) => { err.textContent = msg || ''; err.hidden = !msg; input.toggleAttribute('aria-invalid', !!msg); };
+    input.addEventListener('input', () => showErr(''));
+    const form = h('form', {
+      class: 'tag-add',
+      onsubmit: async (e) => {
+        e.preventDefault();
+        const r = tagError(s, input.value, tags);
+        if (r.error) { showErr(r.error); return; }
+        const msg = await setMeta(s, { addTags: [r.tag] });
+        if (msg) showErr(msg);
+      },
+    }, input);
+    return h('div', { class: 'tagsblock' },
+      h('div', { class: 'tags' },
+        tags.map((t) => h('span', { class: `tag${state.tags.has(t) ? ' on' : ''}` },
+          h('button', {
+            class: 'tag-name', type: 'button', 'aria-pressed': String(state.tags.has(t)), title: `Filter by ${t}`, 'data-fk': `tn:${k}:${t}`,
+            onclick: () => { if (state.tags.has(t)) state.tags.delete(t); else state.tags.add(t); render(); },
+          }, t),
+          h('button', {
+            class: 'tag-x', type: 'button', 'aria-label': `Remove tag ${t} from ${s.name}`, title: `Remove ${t}`, 'data-fk': `tx:${k}:${t}`,
+            onclick: async () => { const msg = await setMeta(s, { removeTags: [t] }); if (msg) toast(msg, 'error'); },
+          }, xIcon())),
+        ),
+        form),
+      err);
+  }
+
+  function setPicked(name, on) {
+    if (on) state.selected.add(name); else state.selected.delete(name);
+    renderActionBar();
+  }
+
   function card(s, maxCost = 1) {
     const k = key(s);
     const other = s.scope === 'global' ? 'local' : 'global';
     const has = (scope) => (s.alsoIn || []).includes(scope);
     const canNormalize = s.scope === 'global' && FIXABLE.has(s.status);
 
-    const el = h('article', { class: `card${s.active ? '' : ' inactive'}${state.busy.has(k) ? ' busy' : ''}`, 'aria-labelledby': `n-${k}` },
+    const pick = state.selecting && s.scope === 'global';
+    const el = h('article', { class: `card${s.active ? '' : ' inactive'}${state.busy.has(k) ? ' busy' : ''}${pick && state.selected.has(s.name) ? ' selected' : ''}`, 'aria-labelledby': `n-${k}` },
       h('div', { class: 'card-top' },
+        pick ? h('input', {
+          class: 'pick', type: 'checkbox', 'aria-label': `Select ${s.name}`, 'data-fk': `pick:${k}`,
+          checked: state.selected.has(s.name) ? true : null,
+          onchange: (e) => { setPicked(s.name, e.target.checked); el.classList.toggle('selected', e.target.checked); },
+        }) : null,
         h('div', { class: 'card-id' },
           h('h3', { class: 'name', id: `n-${k}`, text: s.name }),
           h('div', { class: 'badges' },
@@ -462,13 +634,16 @@
             has(other) ? h('span', { class: 'badge also', text: `Also ${other}` }) : null,
             resultOf(s) ? updateBadge(resultOf(s)) : null,
             isModified(s) ? h('span', { class: 'badge warn', title: 'The files differ from the version that was installed.', text: 'Modified locally' }) : null)),
-        h('button', {
-          class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(s.active),
-          'aria-label': `${s.active ? 'Deactivate' : 'Activate'} ${s.name}`, 'data-fk': `sw:${k}`,
-          title: s.active ? 'Active. Click to deactivate.' : 'Inactive. Click to activate.',
-          onclick: () => toggle(s),
-        })),
+        h('div', { class: 'card-ctl' },
+          favButton(s),
+          h('button', {
+            class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(s.active),
+            'aria-label': `${s.active ? 'Deactivate' : 'Activate'} ${s.name}`, 'data-fk': `sw:${k}`,
+            title: s.active ? 'Active. Click to deactivate.' : 'Inactive. Click to activate.',
+            onclick: () => toggle(s),
+          }))),
       h('p', { class: `desc${s.description ? '' : ' empty'}`, text: s.description || 'No description in SKILL.md.' }),
+      tagsBlock(s),
       s.cost ? h('div', { class: `costbar${s.active ? '' : ' off'}`, 'aria-hidden': 'true', title: costTitle(s) }, h('i', { style: `width:${Math.max(2, Math.round((costOf(s) / maxCost) * 100))}%` })) : null,
       originBlock(s),
       s.issues && s.issues.length ? h('ul', { class: `issues${STATUS[s.status] && STATUS[s.status].tone === 'bad' ? ' bad' : ''}` }, s.issues.map((i) => h('li', { text: i }))) : null,
@@ -632,7 +807,9 @@
     if (exists) options.push({ type: 'checkbox', name: 'overwrite', label: 'Overwrite the local copy', hint: 'A local skill with this name already exists.', checked: false });
     const values = await confirmDialog({
       title: `Copy ${s.name} to local`,
-      lead: 'Copies the skill into this project. The global copy stays.',
+      lead: s.active
+        ? 'Copies the skill into this project. The global copy stays.'
+        : 'Copies the skill into this project, where the copy is active. The global copy stays inactive.',
       confirmLabel: 'Copy',
       options,
       preview: async (v) => previewOf(await safeDry({ ...base, target: v.target, overwrite: !!v.overwrite })),
@@ -987,7 +1164,9 @@
     const inGlobal = skillsOf('global').some((g) => g.name === k.name);
     return h('li', { class: `prow${k.active ? '' : ' inactive'}${busy ? ' busy' : ''}` },
       h('div', { class: 'prow-main' },
-        h('span', { class: 'pname', text: k.name }),
+        h('span', { class: 'pname' },
+          k.name,
+          metaOf(k).favorite ? h('span', { class: 'fav-mark', role: 'img', 'aria-label': 'Favorite', title: 'Favorite' }, starIcon(true)) : null),
         h('div', { class: 'badges' },
           k.status !== 'ok' ? badge(k.status) : null,
           !k.active ? h('span', { class: 'badge plain', text: 'Inactive' }) : null,
@@ -1064,11 +1243,118 @@
     await perform(null, { ...base, projectRoot: root, overwrite: !!values.overwrite }, { busyKey: pkey(root, r.name) });
   }
 
+  // ---------- multi-select and batch copy ----------
+
+  function renderActionBar() {
+    const bar = $('#actionbar');
+    const on = state.selecting && state.scope === 'global' && !!state.data;
+    bar.hidden = !on;
+    document.body.classList.toggle('has-bar', on);
+    if (!on) return;
+    const visible = visibleSkills();
+    const allPicked = visible.length > 0 && visible.every((s) => state.selected.has(s.name));
+    const n = state.selected.size;
+    bar.replaceChildren(
+      h('p', { class: 'sel-count', role: 'status' }, h('strong', { text: n }), ` ${n === 1 ? 'skill' : 'skills'} selected`),
+      h('div', { class: 'sel-actions' },
+        h('button', {
+          class: 'btn small', type: 'button', 'data-fk': 'sel-all', disabled: visible.length ? null : true,
+          text: allPicked ? `Deselect visible (${visible.length})` : `Select all visible (${visible.length})`,
+          onclick: () => {
+            for (const s of visible) { if (allPicked) state.selected.delete(s.name); else state.selected.add(s.name); }
+            render();
+          },
+        }),
+        h('button', { class: 'btn small primary', type: 'button', 'data-fk': 'sel-copy', disabled: n ? null : true, text: 'Copy to local', onclick: copySelected }),
+        h('button', { class: 'btn small ghost', type: 'button', 'data-fk': 'sel-clear', disabled: n ? null : true, text: 'Clear', onclick: () => { state.selected.clear(); render(); } })));
+  }
+
+  /** A batch dry run or copy. A partial failure comes back as an error JSON that still carries `results`. */
+  async function batchCall(payload) {
+    try {
+      return await api('/api/action', payload);
+    } catch (e) {
+      if (e.body && Array.isArray(e.body.results)) return e.body;
+      throw e;
+    }
+  }
+
+  function batchPreview(res) {
+    const results = res.results || [];
+    const lines = [];
+    for (const r of results) lines.push(r.ok ? { text: `${r.name}: will be copied` } : { text: `${r.name}: ${r.error || 'will fail'}`, error: true });
+    const changes = res.changes || [];
+    if (changes.length) {
+      lines.push({ text: 'Changes', group: true });
+      changes.forEach((c) => lines.push({ text: c }));
+    }
+    return { lines, blocked: results.length > 0 && results.every((r) => !r.ok) };
+  }
+
+  async function copySelected() {
+    const names = state.data.global.filter((s) => state.selected.has(s.name)).map((s) => s.name);
+    if (!names.length) return;
+    const n = names.length;
+    const base = { action: 'copyToLocal', scope: 'global', names };
+    const inactive = state.data.global.filter((s) => state.selected.has(s.name) && !s.active).length;
+    const values = await confirmDialog({
+      title: `Copy ${n} ${n === 1 ? 'skill' : 'skills'} to local`,
+      lead: `Copies each skill into this project${inactive ? ', including inactive ones (the copies are active)' : ''}. The global copies stay as they are. A skill that fails does not stop the others.`,
+      confirmLabel: `Copy ${n} ${n === 1 ? 'skill' : 'skills'}`,
+      options: [
+        { type: 'radio', name: 'target', value: 'claude', label: 'Into .claude/skills', hint: 'Visible to Claude in this project.', checked: true },
+        { type: 'radio', name: 'target', value: 'agents', label: 'Into .agents/skills', hint: 'Shared with other agents in this project.' },
+        { type: 'checkbox', name: 'overwrite', label: 'Overwrite local copies', hint: 'Without this, a skill that already exists in this project fails.', checked: false },
+      ],
+      preview: async (v) => {
+        try { return batchPreview(await batchCall({ ...base, dryRun: true, target: v.target, overwrite: !!v.overwrite })); } catch (e) { return { error: e.message }; }
+      },
+    });
+    if (!values) return;
+    for (const nm of names) state.busy.add(`global:${nm}`);
+    render();
+    let res;
+    try {
+      res = await batchCall({ ...base, target: values.target, overwrite: !!values.overwrite });
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      for (const nm of names) state.busy.delete(`global:${nm}`);
+    }
+    if (res) {
+      const results = res.results || [];
+      for (const r of results) if (r.ok) state.selected.delete(r.name);
+      showResults(results, values);
+    }
+    await refresh();
+  }
+
+  function showResults(results, values) {
+    const okN = results.filter((r) => r.ok).length;
+    const bad = results.length - okN;
+    toast(bad ? `Copied ${okN} of ${results.length}. ${bad} failed.` : `Copied ${okN} ${okN === 1 ? 'skill' : 'skills'} to local.`, bad ? 'error' : 'info');
+    const dlg = $('#results');
+    const close = h('button', { class: 'btn primary', type: 'submit', text: 'Close', value: 'close' });
+    dlg.replaceChildren(h('form', { method: 'dialog' },
+      h('h2', { id: 'results-title', text: bad ? `Copied ${okN} of ${results.length}` : `Copied ${okN} ${okN === 1 ? 'skill' : 'skills'}` }),
+      h('p', { class: 'lead', text: bad
+        ? `${bad} ${bad === 1 ? 'skill was' : 'skills were'} not copied and ${bad === 1 ? 'stays' : 'stay'} selected. Fix the cause, or turn on overwrite, and try again.`
+        : `Every skill is now in .${values.target}/skills of this project.` }),
+      h('ul', { class: 'results' }, results.map((r) => h('li', { class: r.ok ? 'ok' : 'bad' },
+        h('span', { class: `badge ${r.ok ? 'accent' : 'bad'}`, text: r.ok ? 'Copied' : 'Failed' }),
+        h('div', {}, h('strong', { text: r.name }), r.ok ? null : h('p', { text: `${r.error || 'Unknown error.'}${r.code ? ` (${r.code})` : ''}` }))))),
+      h('div', { class: 'modal-actions' }, close)));
+    dlg.showModal();
+    close.focus();
+  }
+
   // ---------- wiring ----------
 
   function setScope(scope) {
     state.scope = scope;
     state.filter = 'all';
+    state.selecting = false;
+    state.selected.clear();
     render();
     if (scope === 'projects' && !state.projects && !state.projectsLoading) loadProjects();
   }
@@ -1085,6 +1371,11 @@
   });
 
   $('#check-btn').addEventListener('click', checkUpdates);
+  $('#select-toggle').addEventListener('click', () => {
+    state.selecting = !state.selecting;
+    if (!state.selecting) state.selected.clear();
+    render();
+  });
   $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; renderList(); });
 
   $('#search').addEventListener('input', (e) => { state.q = e.target.value; renderList(); });

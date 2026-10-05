@@ -141,7 +141,7 @@ function setLocalList(root, arr) { if (!root || root === ROOT) db.local = arr; e
 function projectsPayload() {
   const projects = visibleProjects().filter((p) => p.list.length).map((p) => ({
     root: p.root, name: p.name,
-    skills: p.list.map((x) => ({ name: x.name, active: x.active, status: x.status, cost: x.cost })),
+    skills: p.list.map((x) => ({ name: x.name, active: x.active, status: x.status, cost: x.cost, meta: metaOf(x.name) })),
   }));
   const byName = new Map();
   for (const p of projects) for (const k of p.skills) byName.set(k.name, [...(byName.get(k.name) || []), p.root]);
@@ -152,6 +152,62 @@ function projectsPayload() {
 }
 
 seed();
+
+// ---- favorites and tags (in memory, keyed by skill name like the real config) ----
+const metaDb = {
+  'orca-cli': { favorite: true, tags: ['agents', 'orca'] },
+  'wrangler': { favorite: true, tags: ['cloudflare', 'saas'] },
+  'adr-logger': { favorite: true, tags: ['docs'] },
+  'build-a-saas': { favorite: false, tags: ['saas'] },
+  'cordova-plugins': { favorite: false, tags: ['mobile'] },
+  'capacitor-app-checklist': { favorite: false, tags: ['mobile'] },
+  'hfps-visuals': { favorite: false, tags: ['design', 'docs'] },
+  'release-notes': { favorite: true, tags: [] },
+};
+const metaSeed = JSON.stringify(metaDb);
+const TAG_RE = /^[a-z0-9-]{1,24}$/;
+const metaOf = (name) => { const e = metaDb[name]; return { favorite: !!(e && e.favorite), tags: e ? [...e.tags] : [] }; };
+const withMeta = (list) => list.map((s) => ({ ...s, meta: metaOf(s.name) }));
+const onDisk = () => new Set([...db.global, ...db.local].map((s) => s.name));
+function metaSummary() {
+  const names = onDisk();
+  const counts = new Map();
+  let favorites = 0;
+  for (const n of names) {
+    const m = metaOf(n);
+    if (m.favorite) favorites += 1;
+    for (const t of m.tags) counts.set(t, (counts.get(t) || 0) + 1);
+  }
+  const tags = [...counts].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  return { tags, favorites };
+}
+function applyMeta(b) {
+  if (typeof b.name !== 'string' || !onDisk().has(b.name)) return err('not-found', `No skill named ${b.name}.`, 404);
+  const cur = metaOf(b.name);
+  const norm = (list, what) => {
+    if (!Array.isArray(list) || !list.every((t) => typeof t === 'string')) return { error: `${what} must be an array of strings.` };
+    for (const t of list) if (!TAG_RE.test(t)) return { error: `Invalid tag "${t}". Tags are lowercase letters, digits and hyphens, 1 to 24 characters.` };
+    return { list };
+  };
+  let tags = cur.tags;
+  for (const [field, what] of [['tags', 'tags'], ['addTags', 'addTags'], ['removeTags', 'removeTags']]) {
+    if (b[field] === undefined) continue;
+    const r = norm(b[field], what);
+    if (r.error) return err('invalid', r.error, 400);
+    if (field === 'tags') tags = r.list;
+    else if (field === 'addTags') tags = [...tags, ...r.list];
+    else tags = tags.filter((t) => !r.list.includes(t));
+  }
+  tags = [...new Set(tags)].sort();
+  if (tags.length > 8) return err('invalid', 'A skill can have at most 8 tags.', 400);
+  let favorite = cur.favorite;
+  if (b.favorite !== undefined) {
+    if (typeof b.favorite !== 'boolean') return err('invalid', 'favorite must be true or false.', 400);
+    favorite = b.favorite;
+  }
+  if (!favorite && !tags.length) delete metaDb[b.name]; else metaDb[b.name] = { favorite, tags };
+  return { body: { ok: true, meta: metaOf(b.name) } };
+}
 
 const find = (scope, name, root) => (scope === 'local' ? localList(root) : db[scope]).find((s) => s.name === name);
 const err = (code, error, status = 409) => ({ status, body: { ok: false, error, code } });
@@ -165,7 +221,7 @@ function act(d, b) {
     if (b.scope !== 'local') return err('bad-scope', 'projectRoot only applies to local skills.', 400);
   }
   const s = find(b.scope, b.name, b.projectRoot);
-  if (!s) return err('not-found', `No ${b.scope} skill named ${b.name}.`, 404);
+  if (!s) return err('not-found', b.scope === 'global' ? `no global skill: ${b.name}` : `No ${b.scope} skill named ${b.name}.`, 404);
   const g = b.scope === 'global';
   switch (b.action) {
     case 'activate':
@@ -222,7 +278,7 @@ function act(d, b) {
       const path = `${root}/.${tgt}/skills/${s.name}`;
       if (!b.dryRun) {
         setLocalList(b.projectRoot, localList(b.projectRoot).filter((x) => x.name !== s.name));
-        localList(b.projectRoot).push({ ...s, scope: 'local', status: 'ok', issues: [], locations: [loc(tgt, path)] });
+        localList(b.projectRoot).push({ ...s, scope: 'local', active: true, status: 'ok', issues: [], locations: [loc(tgt, path)] });
         link();
       }
       return { body: { ok: true, message: `Copied ${s.name} to ${path.replace(root, '.')}.`, changes: [`copy ${s.locations[0].path} -> ${path}`] } };
@@ -303,7 +359,7 @@ createServer(async (req, res) => {
       return send(res, 200, {
         cwd: noProject ? HOME : `${ROOT}/packages/web`,
         project: noProject ? null : { root: ROOT, name: 'atlas' },
-        global: db.global, local: db.local, totals,
+        global: withMeta(db.global), local: withMeta(db.local), totals, ...metaSummary(),
       });
     }
     if (url.pathname === '/api/diff') {
@@ -345,12 +401,41 @@ createServer(async (req, res) => {
       if (!s) return send(res, 404, { ok: false, error: 'Skill not found.', code: 'not-found' });
       const markdown = s.files === 0 ? '' : `---\nname: ${s.name}\ndescription: ${s.description}\n---\n\n# ${s.name}\n\nUse this skill when the task matches its description.\n\n## Steps\n\n1. Read the references first.\n2. Apply the checklist.\n3. Report what changed.\n`;
       const tree = s.files === 0 ? [] : ['SKILL.md', 'references/guide.md', 'assets/template.html'].slice(0, Math.max(1, s.files));
-      return send(res, 200, { skill: s, markdown, tree });
+      return send(res, 200, { skill: { ...s, meta: metaOf(s.name) }, markdown, tree });
+    }
+    if (url.pathname === '/api/_reset' && req.method === 'POST') {
+      // Test hook for the mock only: back to the seed data (used by screenshot runs).
+      seed();
+      for (const k of Object.keys(metaDb)) delete metaDb[k];
+      Object.assign(metaDb, JSON.parse(metaSeed));
+      return send(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/meta' && req.method === 'POST') {
+      let raw = '';
+      for await (const c of req) raw += c;
+      const out = applyMeta(JSON.parse(raw || '{}'));
+      return send(res, out.status || 200, out.body);
     }
     if (url.pathname === '/api/action' && req.method === 'POST') {
       let raw = '';
       for await (const c of req) raw += c;
-      const out = act(null, JSON.parse(raw || '{}'));
+      const body = JSON.parse(raw || '{}');
+      if (Array.isArray(body.names)) {
+        // Batch: continue past failures; top-level ok only if every item succeeded.
+        const results = [];
+        const changes = [];
+        let message = '';
+        for (const name of body.names) {
+          const one = act(null, { ...body, names: undefined, name });
+          const o = one.body;
+          if (o.ok) { results.push({ name, ok: true }); changes.push(...(o.changes || [])); } else results.push({ name, ok: false, error: o.error, code: o.code });
+        }
+        const okN = results.filter((r) => r.ok).length;
+        const all = okN === results.length;
+        message = all ? `${body.dryRun ? 'Would copy' : 'Copied'} ${okN} ${okN === 1 ? 'skill' : 'skills'}.` : `${okN} of ${results.length} succeeded, ${results.length - okN} failed.`;
+        return send(res, all ? 200 : 409, { ok: all, message, changes, results });
+      }
+      const out = act(null, body);
       return send(res, out.status || 200, out.body);
     }
     if (url.pathname.startsWith('/api/')) return send(res, 404, { ok: false, error: 'Unknown endpoint.', code: 'not-found' });
