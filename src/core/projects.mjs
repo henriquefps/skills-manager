@@ -3,6 +3,8 @@ import path from 'node:path';
 import { readConfig } from './config.mjs';
 import { resolveContext, SkmError } from './context.mjs';
 import { dirHash } from './fsutil.mjs';
+import { GIT_CONCURRENCY, mapLimit, projectAuto } from './projectinfo.mjs';
+import { projectMetaFor, readProjectMeta, writeProjectMeta } from './projectmeta.mjs';
 import { scanScope } from './scan.mjs';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.Trash']);
@@ -62,12 +64,18 @@ function skillDir(skill) {
   return loc?.path ?? null;
 }
 
-/** Scan the configured roots. `config` overrides the stored one ({ projectRoots, scanDepth }). */
-export function scanProjects(opts = {}, config) {
+const skillEntry = (s) => ({ name: s.name, active: s.active, status: s.status, cost: skillCost(s), meta: s.meta });
+
+/**
+ * Scan the configured roots. `config` overrides the stored one ({ projectRoots, scanDepth }). Every project carries its
+ * stored `meta` and its computed `auto` facts (git best effort, run with bounded concurrency).
+ */
+export async function scanProjects(opts = {}, config) {
   const ctx = resolveContext(opts);
   const { projectRoots, scanDepth } = config ?? readConfig(ctx);
   const seen = new Set();
-  const projects = [];
+  let projects = [];
+  const metas = readProjectMeta(ctx);
   const dirs = new Map(); // project root -> name -> folder
   for (const r of projectRoots) {
     for (const p of findProjects(ctx, r, scanDepth)) {
@@ -78,11 +86,14 @@ export function scanProjects(opts = {}, config) {
       projects.push({
         root: p.root,
         name: p.name,
-        skills: p.skills.map((s) => ({ name: s.name, active: s.active, status: s.status, cost: skillCost(s), meta: s.meta })),
+        meta: projectMetaFor(metas, p.root),
+        skills: p.skills.map(skillEntry),
       });
     }
   }
   projects.sort((a, b) => (a.root < b.root ? -1 : 1));
+  const autos = await mapLimit(projects, GIT_CONCURRENCY, (p) => projectAuto(ctx, p.root));
+  projects = projects.map((p, i) => ({ root: p.root, name: p.name, meta: p.meta, auto: autos[i], skills: p.skills }));
 
   const byName = new Map();
   for (const p of projects) for (const s of p.skills) byName.set(s.name, [...(byName.get(s.name) ?? []), p.root]);
@@ -130,4 +141,23 @@ export function projectContext(opts, projectRoot) {
   if (!proj) throw new SkmError('no-project', `not a project: ${projectRoot}`);
   if (!allowed.some((r) => inside(proj, r))) throw new SkmError('forbidden', `projectRoot is outside the configured project roots: ${projectRoot}`);
   return pctx;
+}
+
+/** The same entry `scanProjects` returns, for one project folder (used for projects without skills and the current one). */
+export async function describeProject(opts, root) {
+  const ctx = resolveContext(opts);
+  const pctx = projectCtx(ctx, root);
+  return {
+    root,
+    name: path.basename(root),
+    meta: projectMetaFor(readProjectMeta(ctx), root),
+    auto: await projectAuto(ctx, root),
+    skills: scanScope(pctx, 'local').map(skillEntry),
+  };
+}
+
+/** Change the stored meta of a project; `req.root` goes through the same guard as `projectRoot` on actions. Returns the meta. */
+export function updateProjectMeta(opts, req) {
+  const pctx = projectContext(opts, req?.root);
+  return writeProjectMeta(opts, pctx.project.root, req);
 }

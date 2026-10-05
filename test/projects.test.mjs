@@ -71,27 +71,27 @@ test('config: validation', () => {
   assert.deepEqual(readConfig({ home }), { projectRoots: [], scanDepth: 3 });
 });
 
-test('scan: depth, skip rules, never descends into a found project', () => {
+test('scan: depth, skip rules, never descends into a found project', async () => {
   const { home, ws } = build();
-  const scan = (scanDepth) => scanProjects({ home }, { projectRoots: [ws], scanDepth });
-  assert.deepEqual(names(scan(1)), ['a']);
-  assert.deepEqual(names(scan(2)), ['a', 'group/b', 'real/viaLink']);
-  assert.deepEqual(names(scan(4)), ['a', 'group/b', 'group/deep/deeper/c', 'real/viaLink']);
-  const all = names(scan(6));
+  const scan = async (scanDepth) => await scanProjects({ home }, { projectRoots: [ws], scanDepth });
+  assert.deepEqual(names(await scan(1)), ['a']);
+  assert.deepEqual(names(await scan(2)), ['a', 'group/b', 'real/viaLink']);
+  assert.deepEqual(names(await scan(4)), ['a', 'group/b', 'group/deep/deeper/c', 'real/viaLink']);
+  const all = names(await scan(6));
   assert.ok(!all.some((n) => /node_modules|\.hidden|nested|noskills|linkdir/.test(n)), all.join());
-  const a = scan(1).projects[0];
+  const a = (await scan(1)).projects[0];
   assert.deepEqual(a.skills.map((s) => s.name), ['one', 'shared']);
   assert.deepEqual(Object.keys(a.skills[0]), ['name', 'active', 'status', 'cost', 'meta']);
 });
 
-test('scan: skills carry active/status and ceil(chars/4) cost', () => {
+test('scan: skills carry active/status and ceil(chars/4) cost', async () => {
   const home = tmp();
   const root = tmp();
   const p = proj(path.join(root, 'p'), 'live');
   mkSkill(path.join(p, '.claude', 'skills-inactive'), 'asleep');
   const md = skillMd('live', 'x'.repeat(30));
   fs.writeFileSync(path.join(p, '.claude', 'skills', 'live', 'SKILL.md'), md);
-  const [found] = scanProjects({ home }, { projectRoots: [root], scanDepth: 1 }).projects;
+  const [found] = (await scanProjects({ home }, { projectRoots: [root], scanDepth: 1 })).projects;
   const live = found.skills.find((s) => s.name === 'live');
   assert.equal(live.active, true);
   assert.equal(live.status, 'ok');
@@ -99,15 +99,15 @@ test('scan: skills carry active/status and ceil(chars/4) cost', () => {
   assert.equal(found.skills.find((s) => s.name === 'asleep').active, false);
 });
 
-test('scan: the home dir is never a project and a root can itself be a project', () => {
+test('scan: the home dir is never a project and a root can itself be a project', async () => {
   const home = tmp();
   mkSkill(path.join(home, '.agents', 'skills'), 'global1');
   const solo = proj(path.join(home, 'solo'), 's');
-  const scan = scanProjects({ home }, { projectRoots: [home, solo], scanDepth: 1 });
+  const scan = await scanProjects({ home }, { projectRoots: [home, solo], scanDepth: 1 });
   assert.deepEqual(scan.projects.map((p) => p.root), [solo]);
 });
 
-test('repeated: identical vs diverged, inGlobal, single-project skills excluded', () => {
+test('repeated: identical vs diverged, inGlobal, single-project skills excluded', async () => {
   const home = tmp();
   mkSkill(path.join(home, '.agents', 'skills'), 'inglobal');
   const root = tmp();
@@ -116,7 +116,7 @@ test('repeated: identical vs diverged, inGlobal, single-project skills excluded'
   proj(path.join(root, 'p3'), 'same', 'differs', 'inglobal');
   fs.writeFileSync(path.join(root, 'p2', '.claude', 'skills', 'differs', 'SKILL.md'), skillMd('differs', 'other'));
   mkSkill(path.join(root, 'p2', '.agents', 'skills'), 'inglobal');
-  const { repeated } = scanProjects({ home }, { projectRoots: [root], scanDepth: 1 });
+  const { repeated } = await scanProjects({ home }, { projectRoots: [root], scanDepth: 1 });
   assert.deepEqual(repeated.map((r) => r.name), ['differs', 'inglobal', 'same']);
   const get = (n) => repeated.find((r) => r.name === n);
   assert.equal(get('differs').identical, false);

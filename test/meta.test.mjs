@@ -136,7 +136,7 @@ test('meta: empty entries are pruned, untouched entries and the file stay intact
   assert.equal(fs.existsSync(configPath(fresh)), false);
 });
 
-test('meta: state and projects carry meta, tags counts and favorites', () => {
+test('meta: state and projects carry meta, tags counts and favorites', async () => {
   const { o, home, root } = inactiveSetup();
   updateMeta(o, { name: 'good', favorite: true, addTags: ['saas', 'mobile'] });
   updateMeta(o, { name: 'sleepy', addTags: ['saas'] });
@@ -150,7 +150,7 @@ test('meta: state and projects carry meta, tags counts and favorites', () => {
   assert.equal(st.favorites, 3); // good (counted once for both scopes), localonly, gone
   fs.mkdirSync(path.join(home, 'ws'));
   fs.renameSync(root, path.join(home, 'ws', 'p'));
-  const scan = scanProjects(o, { projectRoots: [path.join(home, 'ws')], scanDepth: 2 });
+  const scan = await scanProjects(o, { projectRoots: [path.join(home, 'ws')], scanDepth: 2 });
   assert.deepEqual(scan.projects[0].skills.find((s) => s.name === 'localonly').meta, { favorite: true, tags: [] });
   assert.deepEqual(scan.projects[0].skills.find((s) => s.name === 'good').meta.tags, ['mobile', 'saas']);
 });

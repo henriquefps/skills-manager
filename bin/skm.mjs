@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
-import { assertSkillsExist, checkUpdates, configPath, diffUpstream, getState, normalizeAll, readConfig, resolveContext, runAction, scanProjects, SkmError, statLine, updateMeta, writeConfig } from '../src/core/index.mjs';
+import { assertSkillsExist, checkUpdates, configPath, describeProject, diffUpstream, findProjectRoot, getState, normalizeAll, projectDescription, projectStatus, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, statLine, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -22,13 +22,17 @@ const USAGE = `skm: skills manager
   skm lint [name] [--json] [--all]   check SKILL.md content; exit 1 on errors
   skm diff <name> [--json]   installed vs upstream (local edits show as removals)
   skm update <name>|--all [--force]   update from the source; the old version goes to the system Trash
-  skm projects [--json]   scan the configured project roots (repeated skills flagged)
+  skm projects [--json] [--brief] [--all]   scan the configured project roots (archived hidden unless --all)
+  skm projects find <query...> [--json] [--brief] [--all]   projects matching every word, best first
+  skm projects show <name|path> [--json]   full sheet of one project
+  skm projects set <name|path> [--desc "..."] [--tags a,b] [--add-tag t] [--rm-tag t] [--status active|paused|archived]
+                   [--note "..."] [--clear desc|tags|notes|status]   describe a project for agents
   skm projects add|rm <path>   |   skm projects depth <n>   |   skm config
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
 Env: SKM_HOME overrides the home directory.`;
 
-const FLAGS_WITH_VALUE = new Set(['--keep', '--port', '--target', '--tag']);
+const FLAGS_WITH_VALUE = new Set(['--keep', '--port', '--target', '--tag', '--desc', '--tags', '--add-tag', '--rm-tag', '--status', '--note', '--clear']);
 
 export function parseArgs(argv) {
   const out = { _: [], flags: {} };
@@ -190,7 +194,93 @@ function printDiff(d) {
 
 // ---- projects ------------------------------------------------------------
 
-async function projectsCommand(opts, [sub, arg], flags) {
+const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+const STATUS_PAINT = { paused: c.yellow, archived: c.dim };
+
+/** Entry for `--brief --json`: what an agent needs to pick a project. */
+const brief = (p) => ({ name: p.name, path: p.root, description: projectDescription(p), tags: p.meta.tags, status: projectStatus(p), stack: p.auto.stack ?? [], lastCommitAt: p.auto.lastCommitAt ?? null });
+
+function projectsTable(projects) {
+  const rows = [['PROJECT', 'DESCRIPTION', 'STATUS', 'SKILLS', 'TOK', 'PATH'].map((h) => c.bold(h))];
+  for (const p of projects) {
+    const active = p.skills.filter((s) => s.active);
+    const status = projectStatus(p);
+    const desc = clip(projectDescription(p), 60) || '-';
+    rows.push([
+      p.name,
+      p.meta.description ? desc : c.dim(desc),
+      (STATUS_PAINT[status] ?? ((x) => x))(status),
+      `${active.length}${active.length < p.skills.length ? ` (+${p.skills.length - active.length} inactive)` : ''}`,
+      String(active.reduce((n, s) => n + s.cost.listing, 0)),
+      p.root,
+    ]);
+  }
+  return table(rows);
+}
+
+/** `<name|path>` -> project entry: a unique exact name among the scanned projects, else a path to a project. */
+async function resolveProject(ctx, scan, arg) {
+  if (!arg) throw new SkmError('invalid', 'usage: skm projects <show|set> <name|path>');
+  const byName = scan.projects.filter((p) => p.name === arg);
+  if (byName.length === 1) return byName[0];
+  if (byName.length > 1) throw new SkmError('ambiguous', `"${arg}" matches ${byName.length} projects, pass one of these paths:\n${byName.map((p) => `  ${p.root}`).join('\n')}`);
+  const abs = path.resolve(ctx.cwd, arg === '~' || arg.startsWith('~/') ? path.join(ctx.home, arg.slice(1)) : arg);
+  const known = scan.projects.find((p) => p.root === abs);
+  if (known) return known;
+  let isDir = false;
+  try {
+    isDir = fs.statSync(abs).isDirectory();
+  } catch {}
+  if (!isDir) {
+    const loose = scan.projects.filter((p) => p.name.toLowerCase() === arg.toLowerCase());
+    if (loose.length === 1) return loose[0];
+    throw new SkmError('not-found', `no project named or located at "${arg}"`);
+  }
+  return describeProject(ctx, findProjectRoot(abs, ctx.home) ?? abs);
+}
+
+function printSheet(p) {
+  const a = p.auto;
+  const active = p.skills.filter((s) => s.active);
+  const row = (k, v) => console.log(`${c.bold(k.padEnd(12))}${v}`);
+  console.log(c.bold(p.name));
+  row('path', p.root);
+  row('remote', a.remote ?? '-');
+  row('branch', a.branch ?? '-');
+  row('last commit', a.lastCommitAt ?? '-');
+  row('stack', a.stack?.join(', ') || '-');
+  row('description', p.meta.description || (a.readme ? `${a.readme} ${c.dim('(from README, auto)')}` : '-'));
+  row('tags', p.meta.tags.join(', ') || '-');
+  row('status', projectStatus(p));
+  row('notes', p.meta.notes || '-');
+  row('skills', `${active.length} active${active.length < p.skills.length ? `, ${p.skills.length - active.length} inactive` : ''} (~${active.reduce((n, s) => n + s.cost.listing, 0)} tokens listed)`);
+  for (const s of p.skills) console.log(`  ${s.active ? s.name : c.dim(`${s.name} (inactive)`)}  ${c.dim(`${s.cost.listing} tok`)}`);
+}
+
+const list = (v) => String(v).split(',').map((t) => t.trim()).filter(Boolean);
+
+/** `skm projects set` flags -> POST /api/project-meta body (without `root`). */
+function metaRequest(flags) {
+  for (const k of ['desc', 'tags', 'add-tag', 'rm-tag', 'status', 'note', 'clear']) if (flags[k] === true) throw new SkmError('invalid', `--${k} needs a value`);
+  const req = {};
+  for (const what of list(flags.clear ?? '')) {
+    if (what === 'desc') req.description = '';
+    else if (what === 'notes' || what === 'note') req.notes = '';
+    else if (what === 'status') req.status = '';
+    else if (what === 'tags') req.tags = [];
+    else throw new SkmError('invalid', `--clear takes desc, tags, notes or status (got "${what}")`);
+  }
+  if (flags.desc !== undefined) req.description = flags.desc;
+  if (flags.note !== undefined) req.notes = flags.note;
+  if (flags.status !== undefined) req.status = flags.status;
+  if (flags.tags !== undefined) req.tags = list(flags.tags);
+  if (flags['add-tag'] !== undefined) req.addTags = list(flags['add-tag']);
+  if (flags['rm-tag'] !== undefined) req.removeTags = list(flags['rm-tag']);
+  if (!Object.keys(req).length) throw new SkmError('invalid', 'nothing to set: pass --desc, --tags, --add-tag, --rm-tag, --status, --note or --clear');
+  return req;
+}
+
+async function projectsCommand(opts, [sub, arg, ...more], flags) {
   const ctx = resolveContext(opts);
   const cfg = readConfig(ctx);
   const target = () => {
@@ -211,19 +301,33 @@ async function projectsCommand(opts, [sub, arg], flags) {
     if (!/^\d+$/.test(arg ?? '')) throw new SkmError('invalid', 'usage: skm projects depth <1-6>');
     return console.log(`scan depth: ${writeConfig(ctx, { scanDepth: Number(arg) }).scanDepth}`);
   }
-  if (sub) throw new SkmError('invalid', `unknown projects subcommand: ${sub}`);
+  if (sub && !['find', 'show', 'set'].includes(sub)) throw new SkmError('invalid', `unknown projects subcommand: ${sub}`);
 
-  const scan = scanProjects(ctx);
-  if (flags.json) return console.log(JSON.stringify(scan, null, 2));
+  const scan = await scanProjects(ctx);
+  if (sub === 'show' || sub === 'set') {
+    const p = await resolveProject(ctx, scan, arg);
+    if (sub === 'show') return flags.json ? console.log(JSON.stringify(p, null, 2)) : printSheet(p);
+    const meta = updateProjectMeta(ctx, { ...metaRequest(flags), root: p.root });
+    if (flags.json) return console.log(JSON.stringify({ ok: true, meta }, null, 2));
+    console.log(`updated ${p.name}`);
+    return console.log(`  description: ${meta.description || '-'}\n  tags: ${meta.tags.join(', ') || '-'}\n  status: ${meta.status || 'active'}\n  notes: ${meta.notes || '-'}`);
+  }
+
+  const visible = (ps) => (flags.all ? ps : ps.filter((p) => p.meta.status !== 'archived'));
+  let projects = visible(scan.projects);
+  if (sub === 'find') {
+    const query = [arg, ...more].filter((w) => w !== undefined).join(' ');
+    if (!query.trim()) throw new SkmError('invalid', 'usage: skm projects find <query...>');
+    projects = searchProjects(projects, query);
+    if (flags.json) return console.log(JSON.stringify(flags.brief ? projects.map(brief) : projects, null, 2));
+    if (!projects.length) return console.log(`no projects match "${query}"`);
+    return console.log(projectsTable(projects));
+  }
+  if (flags.json) return console.log(JSON.stringify(flags.brief ? projects.map(brief) : { ...scan, projects }, null, 2));
   if (!scan.roots.length) return console.log('no project roots configured: add one with `skm projects add <path>`');
   console.log(c.dim(`roots: ${scan.roots.join(', ')} (depth ${cfg.scanDepth})`));
-  if (!scan.projects.length) return console.log('no projects with skills found');
-  const rows = [['PROJECT', 'SKILLS', 'TOK', 'PATH'].map((h) => c.bold(h))];
-  for (const p of scan.projects) {
-    const active = p.skills.filter((s) => s.active);
-    rows.push([p.name, `${active.length}${active.length < p.skills.length ? ` (+${p.skills.length - active.length} inactive)` : ''}`, String(active.reduce((n, s) => n + s.cost.listing, 0)), p.root]);
-  }
-  console.log(table(rows));
+  if (!projects.length) return console.log(scan.projects.length ? 'only archived projects found: use --all' : 'no projects with skills found');
+  console.log(projectsTable(projects));
   if (scan.repeated.length) {
     console.log(`\n${c.bold('Repeated skills')}`);
     for (const r of scan.repeated) {

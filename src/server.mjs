@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkUpdates, diffUpstream, getSkill, getState, projectContext, readConfig, resolveContext, runAction, scanProjects, SkmError, updateMeta, writeConfig } from './core/index.mjs';
+import { checkUpdates, diffUpstream, getSkill, getState, projectContext, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, updateMeta, updateProjectMeta, writeConfig } from './core/index.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const MIME = {
@@ -104,7 +104,15 @@ export function createServer(opts = {}) {
         const meta = updateMeta(body?.projectRoot === undefined ? ctx : projectContext(ctx, body.projectRoot), body);
         return sendJson(res, 200, { ok: true, meta });
       }
-      if (url.pathname === '/api/projects' && req.method === 'GET') return sendJson(res, 200, scanProjects(ctx));
+      if (url.pathname === '/api/project-meta' && req.method === 'POST') {
+        refuseCrossOrigin(req);
+        return sendJson(res, 200, { ok: true, meta: updateProjectMeta(ctx, await readJson(req)) });
+      }
+      if (url.pathname === '/api/projects' && req.method === 'GET') {
+        const scan = await scanProjects(ctx);
+        const q = url.searchParams.get('q');
+        return sendJson(res, 200, q?.trim() ? { ...scan, projects: searchProjects(scan.projects, q) } : scan);
+      }
 
       if (url.pathname === '/api/skill' && req.method === 'GET') {
         const scope = url.searchParams.get('scope') ?? 'global';

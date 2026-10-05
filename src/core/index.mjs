@@ -9,4 +9,7 @@ export { lintSkill } from './lint.mjs';
 export { diffLines, diffTrees, diffUpstream, statLine } from './diff.mjs';
 export { configPath, readConfig, writeConfig, validateConfig } from './config.mjs';
 export { assertSkillsExist, normalizeTags, readMeta, tagCounts, updateMeta } from './meta.mjs';
-export { scanProjects, projectContext } from './projects.mjs';
+export { scanProjects, projectContext, describeProject, updateProjectMeta } from './projects.mjs';
+export { detectStack, mapLimit, normalizeRemote, projectAuto, readmeParagraph } from './projectinfo.mjs';
+export { projectMetaFor, readProjectMeta, writeProjectMeta, STATUSES } from './projectmeta.mjs';
+export { projectDescription, projectStatus, searchProjects } from './projectsearch.mjs';
