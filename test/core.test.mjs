@@ -222,3 +222,93 @@ test('getSkill returns markdown and tree', () => {
   assert.equal(r.skill.files, 2);
   assert.throws(() => getSkill({ home }, 'global', 'missing'), { code: 'not-found' });
 });
+
+// ---- .gitignore handling on local deactivate -----------------------------
+
+const deactivateLocal = (o, dryRun = false) => runAction(o, { action: 'deactivate', scope: 'local', name: 'both', dryRun });
+
+test('local deactivate appends skills-inactive/ to an existing .gitignore, once', () => {
+  const home = buildHome();
+  const root = buildProject(home);
+  const gi = path.join(root, '.gitignore');
+  write(gi, 'node_modules\n');
+  const o = { home, cwd: root };
+  const r = deactivateLocal(o);
+  assert.ok(r.changes.some((c) => c.startsWith('append skills-inactive/ to ')));
+  assert.equal(fs.readFileSync(gi, 'utf8'), 'node_modules\nskills-inactive/\n');
+  runAction(o, { action: 'activate', scope: 'local', name: 'both' });
+  const r2 = deactivateLocal(o);
+  assert.ok(!r2.changes.some((c) => c.includes('.gitignore')));
+  assert.equal(fs.readFileSync(gi, 'utf8'), 'node_modules\nskills-inactive/\n');
+});
+
+test('local deactivate leaves .gitignore alone when skills-inactive is already mentioned', () => {
+  for (const line of ['skills-inactive/', '.claude/skills-inactive', '**/skills-inactive/', '  /.agents/skills-inactive/  ']) {
+    const home = buildHome();
+    const root = buildProject(home);
+    const gi = path.join(root, '.gitignore');
+    write(gi, `# skills-inactive\n\n${line}\n`);
+    const before = fs.readFileSync(gi, 'utf8');
+    const r = deactivateLocal({ home, cwd: root });
+    assert.ok(!r.changes.some((c) => c.includes('.gitignore')), line);
+    assert.equal(fs.readFileSync(gi, 'utf8'), before);
+  }
+});
+
+test('a commented-out mention does not count', () => {
+  const home = buildHome();
+  const root = buildProject(home);
+  write(path.join(root, '.gitignore'), '# skills-inactive/\n');
+  deactivateLocal({ home, cwd: root });
+  assert.equal(fs.readFileSync(path.join(root, '.gitignore'), 'utf8'), '# skills-inactive/\nskills-inactive/\n');
+});
+
+test('local deactivate never creates a .gitignore', () => {
+  const home = buildHome();
+  const root = buildProject(home);
+  const r = deactivateLocal({ home, cwd: root });
+  assert.ok(!r.changes.some((c) => c.includes('.gitignore')));
+  assert.equal(fs.existsSync(path.join(root, '.gitignore')), false);
+});
+
+test('missing trailing newline is handled', () => {
+  const home = buildHome();
+  const root = buildProject(home);
+  const gi = path.join(root, '.gitignore');
+  write(gi, 'dist');
+  deactivateLocal({ home, cwd: root });
+  assert.equal(fs.readFileSync(gi, 'utf8'), 'dist\nskills-inactive/\n');
+});
+
+test('dryRun lists the .gitignore change but does not write it', () => {
+  const home = buildHome();
+  const root = buildProject(home);
+  const gi = path.join(root, '.gitignore');
+  write(gi, 'dist\n');
+  const r = deactivateLocal({ home, cwd: root }, true);
+  assert.ok(r.changes.some((c) => c.startsWith('append skills-inactive/ to ')));
+  assert.equal(fs.readFileSync(gi, 'utf8'), 'dist\n');
+});
+
+test('global deactivate and other actions leave .gitignore alone', () => {
+  const home = buildHome();
+  const root = buildProject(home);
+  const gi = path.join(root, '.gitignore');
+  write(gi, 'dist\n');
+  const o = { home, cwd: root };
+  runAction(o, { action: 'deactivate', scope: 'global', name: 'good' });
+  runAction(o, { action: 'activate', scope: 'global', name: 'good' });
+  runAction(o, { action: 'promote', scope: 'local', name: 'localonly' });
+  runAction(o, { action: 'delete', scope: 'local', name: 'localonly' });
+  assert.equal(fs.readFileSync(gi, 'utf8'), 'dist\n');
+});
+
+test('local deactivate skips the .gitignore outside a git project', () => {
+  const home = buildHome();
+  const root = buildProject(home);
+  fs.rmSync(path.join(root, '.git'), { recursive: true });
+  write(path.join(root, '.gitignore'), 'dist\n');
+  const r = deactivateLocal({ home, cwd: root });
+  assert.ok(!r.changes.some((c) => c.includes('.gitignore')));
+  assert.equal(fs.readFileSync(path.join(root, '.gitignore'), 'utf8'), 'dist\n');
+});

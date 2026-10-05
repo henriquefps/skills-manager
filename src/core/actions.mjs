@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertName, resolveContext, SkmError } from './context.mjs';
 import { dirHash, moveSync } from './fsutil.mjs';
+import { applyIgnoreOp, inactiveIgnoreOp } from './gitignore.mjs';
 import { locate, scanScope } from './scan.mjs';
 
 // ---- plan executor -------------------------------------------------------
@@ -13,6 +14,7 @@ const describe = (op) => {
     case 'symlink': return `symlink ${op.path} -> ${op.target}`;
     case 'unlink': return `unlink ${op.path}`;
     case 'rm': return `remove ${op.path}`;
+    case 'gitignore': return `append ${op.line} to ${op.path}`;
   }
 };
 
@@ -27,6 +29,7 @@ function apply(op) {
       return fs.symlinkSync(op.target, op.path, 'dir');
     case 'unlink': return fs.unlinkSync(op.path);
     case 'rm': return fs.rmSync(op.path, { recursive: true, force: true });
+    case 'gitignore': return applyIgnoreOp(op);
   }
 }
 
@@ -114,6 +117,8 @@ function deactivate(ctx, { scope, name, dryRun }) {
         plan.push(move(l.c.path, path.join(d.claudeInactive, name)));
       }
     }
+    const ignore = plan.some((op) => op.op === 'move') && inactiveIgnoreOp(ctx.project.root);
+    if (ignore) plan.push(ignore);
   }
   return run(plan, dryRun, `deactivated ${scope}/${name}`);
 }

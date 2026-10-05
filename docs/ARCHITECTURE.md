@@ -27,7 +27,9 @@ Local (project) scope, `<root>` = nearest ancestor of cwd with `.git`, `.agents`
 `<root>/.agents/skills`, `<root>/.claude/skills`, `<root>/.agents/skills-inactive`,
 `<root>/.claude/skills-inactive`, `<root>/.agents/skills-trash`. A local skill may live in
 either root as a real folder (both copies is allowed, not required). Local inactive = moved
-to the `skills-inactive` sibling of whichever root(s) held it.
+to the `skills-inactive` sibling of whichever root(s) held it. When a local `deactivate` moves a
+folder there, it appends `skills-inactive/` to `<root>/.gitignore` unless that file is missing (never
+created), not writable, the root has no `.git`, or an active line already mentions `skills-inactive`.
 
 ### Skill status (per name, per scope)
 
