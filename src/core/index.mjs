@@ -7,3 +7,5 @@ export { gitTreeHash } from './treehash.mjs';
 export { costOf, estimateTokens, totalsOf } from './cost.mjs';
 export { lintSkill } from './lint.mjs';
 export { diffLines, diffTrees, diffUpstream, statLine } from './diff.mjs';
+export { configPath, readConfig, writeConfig, validateConfig } from './config.mjs';
+export { scanProjects, projectContext } from './projects.mjs';
