@@ -2,6 +2,45 @@
 (() => {
   'use strict';
 
+  // ---------- theme (System / Light / Dark) ----------
+  // The inline script in index.html applies the saved choice before paint; the
+  // CSS follows the OS on its own while no data-theme is set.
+
+  (() => {
+    const root = document.documentElement;
+    const group = document.getElementById('theme');
+    if (!group) return;
+    const buttons = Array.from(group.querySelectorAll('[data-theme-value]'));
+    let mode = root.getAttribute('data-theme') || 'system';
+    const sync = () => buttons.forEach((b) => {
+      const on = b.dataset.themeValue === mode;
+      b.setAttribute('aria-checked', String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
+    const set = (next) => {
+      mode = next;
+      if (next === 'system') root.removeAttribute('data-theme');
+      else root.setAttribute('data-theme', next);
+      try {
+        if (next === 'system') localStorage.removeItem('skm-theme');
+        else localStorage.setItem('skm-theme', next);
+      } catch { /* storage blocked: the choice lasts for this page only */ }
+      sync();
+    };
+    buttons.forEach((b, i) => {
+      b.addEventListener('click', () => set(b.dataset.themeValue));
+      b.addEventListener('keydown', (e) => {
+        const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+        if (!step) return;
+        e.preventDefault();
+        const n = buttons[(i + step + buttons.length) % buttons.length];
+        n.focus();
+        set(n.dataset.themeValue);
+      });
+    });
+    sync();
+  })();
+
   // ---------- constants ----------
 
   const STATUS = {
