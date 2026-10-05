@@ -278,3 +278,42 @@ project): the action runs with that project as the local scope, so `promote`, `c
 `deactivate`, `delete` work on any scanned project.
 CLI: `skm projects` (scan and list, `--json`), `skm projects add <path>`, `skm projects rm <path>`,
 `skm projects depth <n>`, `skm config` (prints the file path and content).
+
+## Favorites, tags and copying from inactive skills
+
+Inactive global skills are a repository: the user keeps skills switched off and copies them into a project when
+needed. Two changes support that.
+
+1. `copyToLocal` (`skm pull`, "Copy to local") accepts a global skill that is **inactive** (found in
+   `~/.agents/skills-inactive`, or `~/.claude/skills-inactive` as a real folder). The copy is a real folder in the
+   project's skills dir and is active; the global skill stays inactive and untouched. Error text for a missing
+   skill becomes `no global skill: <name>`. (Before this, only active skills could be copied: a bug.)
+2. Favorites and tags, stored in the same config file as the project roots: `<home>/.config/skm/config.json`
+   gains `"skills": { "<name>": { "favorite": true, "tags": ["mobile", "saas"] } }`. Keyed by skill name only, so one
+   entry covers the active and inactive copy and any scope. Entries with `favorite: false` and no tags are removed.
+   Reading and writing the config must **preserve all keys** (`projectRoots`, `scanDepth`, `skills`, and unknown
+   ones); `PUT /api/config` validates and updates only `projectRoots` and `scanDepth` and never drops `skills`.
+   Tag rules: lowercase, `[a-z0-9-]`, 1..24 chars, at most 8 per skill, de-duplicated, stored sorted.
+
+`Skill` gains `meta: { "favorite": false, "tags": [] }` on every skill in `/api/state` and `/api/projects`
+skill entries (same name-keyed lookup). `GET /api/state` also gains `"tags": [ { "tag": "mobile", "count": 3 } ]`
+(all tags in use, sorted by count desc then name) and `"favorites": 4` (count of favorite skills present on disk).
+
+`POST /api/meta` body `{ "name": "wrangler", "favorite": true, "addTags": ["saas"], "removeTags": ["old"] }`
+(every field optional, `tags` may replace the whole list instead of add/remove) -> `{ "ok": true, "meta": { ... } }`;
+errors as JSON (`invalid` for bad tags). Cross-origin requests are refused like the other writes.
+
+Batch copy: `POST /api/action` with `{ "action": "copyToLocal", "names": ["a", "b"], "scope": "global", "overwrite": false,
+"target": "claude", "dryRun": false, "projectRoot": "..."? }` -> `{ "ok": true|false, "message": "...", "changes": [...],
+"results": [ { "name": "a", "ok": true }, { "name": "b", "ok": false, "error": "...", "code": "exists" } ] }`.
+It continues past failures; top-level `ok` is true only if every item succeeded. `name` (single) keeps working.
+
+CLI:
+```
+skm fav <name...>           mark as favorite          skm unfav <name...>
+skm tag <name> <tag...>     add tags                  skm untag <name> <tag...>
+skm tags                    list tags in use with counts
+skm list [--fav] [--tag <t>]   filters (combine with --json); list shows FAV (*) and TAGS columns
+skm pull <name...>          several names at once (same options)
+```
+Names that are not on disk are rejected for `fav`/`tag` (`not-found`) so typos do not create entries.
