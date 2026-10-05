@@ -25,6 +25,15 @@
     filter: 'all',
     busy: new Set(),
     loadError: null,
+    updates: null, // { checkedAt, results } from GET /api/updates; null until the user runs a check
+    checking: false,
+  };
+
+  const UPDATE_STATUS = {
+    'up-to-date': { label: 'Up to date', tone: 'ok' },
+    'update-available': { label: 'Update available', tone: 'accent' },
+    'removed-upstream': { label: 'Removed upstream', tone: 'plain' },
+    'unreachable': { label: 'Check failed', tone: 'warn' },
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -111,6 +120,10 @@
     render();
   }
 
+  const resultOf = (s) => (state.updates && s.scope === 'global' && s.origin ? state.updates.results[s.name] || null : null);
+  const hasUpdate = (s) => { const r = resultOf(s); return !!r && r.status === 'update-available'; };
+  const isModified = (s) => !!(s.origin && s.origin.modified);
+
   const skillsOf = (scope) => (state.data ? state.data[scope] || [] : []);
   const problems = (skills) => skills.filter((s) => s.status !== 'ok');
   const fixAllTargets = () => skillsOf('global').filter((s) => FIXABLE.has(s.status) && s.status !== 'diverged');
@@ -121,7 +134,9 @@
     const focusKey = document.activeElement && document.activeElement.dataset
       ? document.activeElement.dataset.fk : null;
     renderHeader();
+    renderCheckBar();
     renderBanner();
+    renderUpdatesBanner();
     renderTabs();
     renderChips();
     renderList();
@@ -143,6 +158,62 @@
       : 'Skills your agents can use from your home folder. No project was detected in this folder.';
     $('#cwd').textContent = d.cwd || '';
     document.title = `${d.project ? d.project.name : 'Skills'} - skm`;
+  }
+
+  function fmtTime(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function renderCheckBar() {
+    const bar = $('#checkbar');
+    bar.hidden = !state.data || state.scope !== 'global';
+    const btn = $('#check-btn');
+    btn.disabled = state.checking;
+    btn.setAttribute('aria-busy', String(state.checking));
+    btn.replaceChildren(...[
+      state.checking ? h('span', { class: 'spinner', 'aria-hidden': 'true' }) : null,
+      state.checking ? 'Checking' : state.updates ? 'Check again' : 'Check for updates'].filter(Boolean));
+    const meta = $('#check-meta');
+    if (state.checking) meta.textContent = 'Asking GitHub for the latest version of each source. This can take a few seconds.';
+    else if (state.updates) {
+      meta.replaceChildren('Last checked ', h('time', { datetime: state.updates.checkedAt, title: new Date(state.updates.checkedAt).toLocaleString(), text: fmtTime(state.updates.checkedAt) }));
+    } else meta.textContent = 'Runs only when you ask. Compares installed skills with their source on GitHub.';
+  }
+
+  async function checkUpdates() {
+    if (state.checking) return;
+    state.checking = true;
+    render();
+    try {
+      state.updates = await api('/api/updates');
+      const n = skillsOf('global').filter(hasUpdate).length;
+      toast(n ? `${n} ${n === 1 ? 'update' : 'updates'} available.` : 'Everything tracked is up to date.');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      state.checking = false;
+      render();
+    }
+  }
+
+  function renderUpdatesBanner() {
+    const el = $('#updates-banner');
+    if (!state.data || !state.updates || state.scope !== 'global') { el.hidden = true; return; }
+    const n = skillsOf('global').filter(hasUpdate).length;
+    const failed = Object.values(state.updates.results).filter((r) => r.status === 'unreachable').length;
+    el.hidden = false;
+    el.replaceChildren();
+    el.className = `banner updates${n ? ' problems' : ''}`;
+    const note = failed ? ` ${failed} ${failed === 1 ? 'source' : 'sources'} could not be checked.` : '';
+    el.append(
+      h('div', {},
+        h('h2', { text: n ? `${n} ${n === 1 ? 'update' : 'updates'} available` : 'No updates available' }),
+        h('p', { text: (n ? 'Upstream has newer versions of these skills. Each update asks for confirmation first.' : 'Every checked skill matches its source.') + note })),
+      n && state.filter !== 'update'
+        ? h('button', { class: 'btn', type: 'button', 'data-fk': 'show-updates', text: 'Show them', onclick: () => { state.filter = 'update'; render(); } })
+        : '');
   }
 
   function renderBanner() {
@@ -195,6 +266,10 @@
       { id: 'active', label: 'Active', n: skills.filter((s) => s.active).length },
       { id: 'inactive', label: 'Inactive', n: skills.filter((s) => !s.active).length },
     ];
+    if (state.updates && skills.length && skills[0].scope === 'global') {
+      defs.push({ id: 'update', label: 'Update available', n: skills.filter(hasUpdate).length });
+      defs.push({ id: 'modified', label: 'Modified', n: skills.filter(isModified).length });
+    }
     for (const st of STATUS_ORDER) {
       if (st === 'ok') continue;
       const n = skills.filter((s) => s.status === st).length;
@@ -209,6 +284,8 @@
     if (f === 'problems') return s.status !== 'ok';
     if (f === 'active') return s.active;
     if (f === 'inactive') return !s.active;
+    if (f === 'update') return hasUpdate(s);
+    if (f === 'modified') return isModified(s);
     if (f.startsWith('status:')) return s.status === f.slice(7);
     return true;
   }
@@ -216,7 +293,8 @@
   function renderChips() {
     const box = $('#chips');
     const defs = chipDefs(skillsOf(state.scope));
-    if (!defs.some((c) => c.id === state.filter)) state.filter = 'all';
+    const cur = defs.find((c) => c.id === state.filter);
+    if (!cur || (state.filter === 'update' && !cur.n)) state.filter = 'all';
     box.replaceChildren(...defs.map((c) =>
       h('button', {
         class: 'chip', type: 'button', 'aria-pressed': String(c.id === state.filter), 'data-fk': `chip:${c.id}`,
@@ -263,6 +341,30 @@
     return h('span', { class: `badge ${m.tone}`, text: m.label });
   }
 
+  function updateBadge(r) {
+    const m = UPDATE_STATUS[r.status];
+    if (!m) return null;
+    const tip = r.status === 'removed-upstream' ? 'This folder no longer exists in the source repository. It may have been renamed or deleted.'
+      : r.status === 'unreachable' ? `Check failed: ${r.error || 'unknown error'}` : null;
+    return h('span', { class: `badge ${m.tone}`, title: tip }, m.label);
+  }
+
+  function originBlock(s) {
+    const o = s.origin;
+    if (!o) return null;
+    const r = resultOf(s);
+    const note = !r ? null
+      : r.status === 'removed-upstream' ? `No longer in ${o.source}. It may have been renamed or deleted, so it cannot be updated.`
+      : r.status === 'unreachable' ? `Check failed: ${r.error || 'unknown error'}.`
+      : null;
+    return h('div', { class: 'origin' },
+      h('div', { class: 'origin-line' },
+        h('span', { class: 'repo', title: o.url || o.source }, o.source),
+        h('span', { class: 'meta', text: `Installed ${fmtDate(o.installedAt)}` }),
+        o.updatedAt && o.updatedAt !== o.installedAt ? h('span', { class: 'meta', text: `Updated ${fmtDate(o.updatedAt)}` }) : null),
+      note ? h('p', { class: `origin-note${r.status === 'unreachable' ? ' warn' : ''}`, text: note }) : null);
+  }
+
   function card(s) {
     const k = key(s);
     const other = s.scope === 'global' ? 'local' : 'global';
@@ -276,7 +378,9 @@
           h('div', { class: 'badges' },
             badge(s.status),
             !s.active ? h('span', { class: 'badge plain', text: 'Inactive' }) : null,
-            has(other) ? h('span', { class: 'badge also', text: `Also ${other}` }) : null)),
+            has(other) ? h('span', { class: 'badge also', text: `Also ${other}` }) : null,
+            resultOf(s) ? updateBadge(resultOf(s)) : null,
+            isModified(s) ? h('span', { class: 'badge warn', title: 'The files differ from the version that was installed.', text: 'Modified locally' }) : null)),
         h('button', {
           class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(s.active),
           'aria-label': `${s.active ? 'Deactivate' : 'Activate'} ${s.name}`, 'data-fk': `sw:${k}`,
@@ -284,6 +388,7 @@
           onclick: () => toggle(s),
         })),
       h('p', { class: `desc${s.description ? '' : ' empty'}`, text: s.description || 'No description in SKILL.md.' }),
+      originBlock(s),
       s.issues && s.issues.length ? h('ul', { class: `issues${STATUS[s.status] && STATUS[s.status].tone === 'bad' ? ' bad' : ''}` }, s.issues.map((i) => h('li', { text: i }))) : null,
       h('div', { class: 'paths' }, (s.locations || []).map((l) =>
         h('span', { class: `path${l.kind === 'broken-symlink' ? ' broken' : ''}${l.kind !== 'dir' ? ' link' : ''}`, title: l.target ? `${l.path} -> ${l.target}` : l.path },
@@ -295,6 +400,7 @@
         h('div', { class: 'actions' },
           s.scope === 'local' ? h('button', { class: 'btn small', type: 'button', text: 'Promote to global', onclick: () => promote(s) }) : null,
           s.scope === 'global' && state.data.project ? h('button', { class: 'btn small', type: 'button', text: 'Copy to local', onclick: () => copyToLocal(s) }) : null,
+          hasUpdate(s) ? h('button', { class: 'btn small primary', type: 'button', text: 'Update', 'data-fk': `up:${k}`, 'aria-label': `Update ${s.name}`, onclick: () => updateSkill(s) }) : null,
           canNormalize ? h('button', { class: 'btn small', type: 'button', text: 'Normalize', onclick: () => normalize(s) }) : null,
           h('button', { class: 'btn small', type: 'button', text: 'Details', 'data-fk': `d:${k}`, onclick: () => openDetails(s) }),
           h('button', { class: 'btn small danger', type: 'button', text: 'Delete', onclick: () => remove(s) }))));
@@ -451,6 +557,33 @@
     if (values) await perform(s, { ...base, ...(diverged ? { keep: values.keep } : {}) });
   }
 
+  async function updateSkill(s) {
+    const modified = isModified(s);
+    const base = { action: 'update', scope: 'global', name: s.name };
+    const values = await confirmDialog({
+      title: `Update ${s.name}`,
+      lead: `Replaces the installed copy with the latest version from ${s.origin.source}. The old version goes to the system Trash.`
+        + (modified ? ' This skill has local edits. They will be replaced, and they are only kept in the Trash copy.' : ''),
+      confirmLabel: modified ? 'Update anyway' : 'Update',
+      danger: modified,
+      preview: async () => previewOf(await safeDry({ ...base, force: modified })),
+    });
+    if (!values) return;
+    const k = key(s);
+    state.busy.add(k);
+    render();
+    try {
+      const res = await api('/api/action', { ...base, force: modified });
+      toast(res.message || `Updated ${s.name}.`);
+      if (state.updates) state.updates.results[s.name] = { status: 'up-to-date' };
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      state.busy.delete(k);
+      await refresh();
+    }
+  }
+
   async function remove(s) {
     const base = { action: 'delete', scope: s.scope, name: s.name };
     // The destination comes from the dry-run plan, so the lead names the exact place.
@@ -567,6 +700,8 @@
       $(`#tab-${next}`).focus();
     });
   });
+
+  $('#check-btn').addEventListener('click', checkUpdates);
 
   $('#search').addEventListener('input', (e) => { state.q = e.target.value; renderList(); });
 

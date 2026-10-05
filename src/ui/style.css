@@ -145,6 +145,31 @@ h1 {
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted-fg); }
 .btn.ghost:hover:not(:disabled) { background: var(--bg); border-color: var(--border); color: var(--fg); }
 
+/* ---------- update check ---------- */
+
+.checkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 4px; }
+.checkbar[hidden] { display: none; }
+.check-meta { margin: 0; font-size: 13px; color: var(--muted-fg); max-width: 64ch; }
+.spinner {
+  width: 14px; height: 14px; border-radius: 50%; flex: none;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.banner.updates { padding: 14px 22px; }
+.banner.updates h2 { margin: 0; }
+
+.origin { display: flex; flex-direction: column; gap: 6px; }
+.origin-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.repo {
+  display: inline-flex; max-width: 100%; padding: 2px 10px; border-radius: 999px;
+  background: var(--accent-soft); border: 1px solid var(--accent-soft-border);
+  font: 600 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.origin-note { margin: 0; font-size: 13px; color: var(--muted-fg); }
+.origin-note.warn { color: var(--warn); }
+
 /* ---------- toolbar ---------- */
 
 .toolbar {
@@ -237,6 +262,7 @@ h1 {
 .badge.ok::before { background: var(--accent); }
 .badge.warn { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-border); }
 .badge.bad { color: var(--bad); background: var(--bad-soft); border-color: var(--bad-border); }
+.badge.accent { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-soft-border); }
 .badge.plain::before, .badge.also::before { display: none; }
 .badge.also { text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 12px; }
 
@@ -396,6 +422,7 @@ dialog::backdrop { background: oklch(0.15 0.01 107 / 0.45); backdrop-filter: blu
   .tab { flex: 1; justify-content: center; }
   .search kbd { display: none; }
   .banner { flex-direction: column; align-items: stretch; }
+  .checkbar .btn { width: 100%; }
   .card { padding: 16px; }
   .card-foot { flex-direction: column; align-items: stretch; }
   .actions .btn { flex: 1 1 auto; }
