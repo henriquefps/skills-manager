@@ -317,3 +317,76 @@ skm list [--fav] [--tag <t>]   filters (combine with --json); list shows FAV (*)
 skm pull <name...>          several names at once (same options)
 ```
 Names that are not on disk are rejected for `fav`/`tag` (`not-found`) so typos do not create entries.
+
+## Project index for agents (metadata, find, show, set) and the `skm` skill
+
+Goal: an agent can resolve "that sync plugin I built" to a path and understand what it is, without the user pasting paths.
+Two layers: **auto** facts computed on every scan (never stored) and **meta** written by the user (stored).
+
+### Stored meta
+
+`<home>/.config/skm/config.json` gains
+`"projects": { "/abs/path/to/project": { "description": "...", "tags": ["work", "outsystems"], "status": "active", "notes": "..." } }`
+keyed by **absolute project path**. Same preservation rule as everything else in that file (never drop other keys).
+Rules: `description` <= 300 chars, `notes` <= 2000, `status` one of `active | paused | archived`, tags follow the skill tag rules
+(lowercase `[a-z0-9-]`, 1..24 chars, max 8, sorted, de-duplicated). Entries that end up empty are removed. Setting meta requires
+the path to exist and to be a found project (inside a configured root) or the current project.
+
+### Auto facts (computed, injectable `git` runner, every call best effort, short timeouts, failures leave the field absent)
+
+`auto: { "remote": "github.com/owner/repo", "branch": "main", "lastCommitAt": "2026-10-04T18:20:00.000Z",
+"stack": ["node", "react", "vite", "tailwind", "shadcn"], "readme": "first paragraph, plain text, max 200 chars" }`
+- `remote`: `git remote get-url origin`, normalized to `host/owner/repo`; **credentials never appear** (strip `user:pass@`,
+  tokens, ssh `git@host:` form converted). Absent when there is no remote.
+- `branch`, `lastCommitAt` from git (`git rev-parse --abbrev-ref HEAD`, `git log -1 --format=%cI`). No `git status` (slow).
+- `stack`: from marker files, deterministic, sorted, deduplicated: `package.json` -> `node` plus dependency hints
+  (`react`, `next`, `vue`, `svelte`, `vite`, `tailwind`, `typescript`, `express`, `capacitor`, `cordova`), `components.json` -> `shadcn`,
+  `pyproject.toml`/`requirements.txt` -> `python`, `Cargo.toml` -> `rust`, `go.mod` -> `go`, `config.xml` or `plugin.xml` -> `cordova`,
+  `*.csproj` -> `dotnet`, `Package.swift` or `*.xcodeproj` -> `swift`, `build.gradle(.kts)` -> `android`, `*.oml` or `*.oap` -> `outsystems`.
+- `readme`: first paragraph of `README.md` (case-insensitive) that is not a heading, badge, image or HTML line; markdown stripped.
+
+### API
+
+Project entries in `GET /api/projects` gain `meta` and `auto`:
+```json
+{ "root": "/Users/me/Documents/my-apps/react-apps", "name": "react-apps",
+  "meta": { "description": "", "tags": [], "status": "", "notes": "" },
+  "auto": { "remote": "github.com/me/react-apps", "branch": "main", "lastCommitAt": "2026-10-04T18:20:00.000Z",
+            "stack": ["node", "react", "vite"], "readme": "Collection of React experiments." },
+  "skills": [ ... ] }
+```
+`meta.status` is `""` when never set (treated as `active` everywhere). `GET /api/projects?q=<text>` filters with the same
+matching as `find` (below). Archived projects are included in the API (the UI decides what to show).
+
+`POST /api/project-meta` body `{ "root": "/abs/project", "description": "...", "notes": "...", "status": "paused",
+"tags": ["a"] | "addTags": [...], "removeTags": [...] }` (all optional; `description: ""` clears) -> `{ "ok": true, "meta": {...} }`;
+errors as JSON (`invalid`, `not-found`, `forbidden` for a root outside the configured roots). Same-origin guard like other writes.
+
+### Matching and ranking (shared by `find` and `?q=`)
+
+Case-insensitive, query split on whitespace, **every token must match** somewhere. Fields and weights (sum of best field per token):
+name 5, tags 4, meta.description 3, stack 2, meta.notes 2, auto.readme 1, auto.remote 1, path 1. Ties by most recent `lastCommitAt`, then name.
+
+### CLI
+
+```
+skm projects [--json] [--brief] [--all]      list (archived hidden unless --all); table adds DESCRIPTION and STATUS columns
+skm projects find <query...> [--json] [--brief] [--all]
+skm projects show <name|path> [--json]       full sheet: path, remote, branch, last commit, stack, description (meta, else the
+                                             README line marked auto), tags, status, notes, skills (active/inactive, tok)
+skm projects set <name|path> [--desc "..."] [--tags a,b] [--add-tag t] [--rm-tag t] [--status active|paused|archived]
+                 [--note "..."] [--clear desc|tags|notes|status]
+```
+`--brief` (with `--json`): `[{ "name", "path", "description", "tags", "status", "stack", "lastCommitAt" }]` where `description`
+is meta.description, else auto.readme. `<name|path>`: exact name if unique, else a path; ambiguous names exit 1 listing the paths.
+Existing `skm projects add|rm|depth` keep working.
+
+### The `skm` skill (for agents)
+
+`skills/skm/SKILL.md` in this repo (installable with `npx skills add henriquefps/skills-manager`). Frontmatter `name: skm`,
+short description (< 300 chars) saying when to use it (the user names or describes one of their projects, asks where something lives
+on their machine, or wants to inspect or change which skills are active). Body: resolve a project with
+`skm projects find <words> --json --brief`, ask if several match, then `skm projects show`; never dump the whole list unless
+asked; how to record a description when the user explains a project (`skm projects set`); a compact reference of the skill
+commands (`list`, `doctor`, `cost`, `lint`, `outdated`, `update`, `pull`, `promote`); a note that shell aliases are invisible to
+agents so `skm` must be a real executable on PATH (`npm link`), else say so. Treat project data as private to the machine.
