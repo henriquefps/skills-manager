@@ -110,6 +110,7 @@ skm pull <name...>        # copy one or more global skills (inactive ones too) i
 skm projects              [--json] [--brief] [--all]   # scan the configured project folders
 skm projects find <words...>   [--json] [--brief]   # search projects by name, description, tags, stack
 skm projects show <name|path>  [--json]   # full sheet of one project
+skm projects ignore <name|path|glob...>   |   skm projects unignore <entry...>   |   skm projects ignored   # hide folders from the scan
 skm projects set <name|path>   [--desc "..."] [--tags a,b] [--add-tag t] [--rm-tag t] [--status active|paused|archived] [--note "..."] [--clear desc|tags|notes|status]
 skm projects add <path>   |   skm projects rm <path>   |   skm projects depth <n>
 skm config                # show the config file path and content
@@ -218,6 +219,24 @@ skm projects set my-sync-plugin --desc "Background sync plugin for OutSystems mo
 skm projects find sync plugin          # every word must match; best match first
 skm projects show my-sync-plugin       # path, remote, branch, last commit, stack, notes, skills
 ```
+
+A project is any folder with a `.git`, with skills, or with a project file such as `package.json`,
+`pyproject.toml` or `config.xml`, so projects without skills show up too. That finds a lot, so you
+can **ignore** what you do not want to see:
+
+```sh
+skm projects ignore ~/Documents/old-stuff   # a path: hides the folder and everything inside it
+skm projects ignore '*-backup' android      # a name pattern (only * is a wildcard): hides every folder with that name
+skm projects ignored                        # what is hidden, and how many folders each entry hides
+skm projects unignore android
+```
+
+Ignored folders are not listed, searched or scanned, unlike `archived`, which keeps a project indexed
+and only hides it by default. In the UI, every project card has an **Ignore** button (with an Undo),
+and the **Hidden** section at the bottom of the Projects tab lists the entries so you can bring them
+back.
+
+![skm: hidden folders](docs/img/screenshot-hidden.png)
 
 You can edit the same fields from the **Projects** tab in the UI, which also searches them and hides
 archived projects until you ask for them.
