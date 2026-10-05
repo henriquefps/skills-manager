@@ -77,6 +77,7 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - see the **context cost** of every skill and the total for your active ones, and sort by it;
 - see **lint** findings per skill and filter by them;
 - open the **Projects** tab to browse the skills of all your projects;
+- switch the **theme** (System, Light or Dark) with the toggle in the top right corner; your choice is remembered in the browser;
 - mark skills as **favorites**, add **tags**, filter by them, and copy several skills into the project at once.
 
 Options: `--port <n>` picks the port (if it is taken, the next free one is used) and
