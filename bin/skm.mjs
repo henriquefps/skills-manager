@@ -2,18 +2,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
-import { checkUpdates, configPath, diffUpstream, getState, normalizeAll, readConfig, resolveContext, runAction, scanProjects, SkmError, statLine, writeConfig } from '../src/core/index.mjs';
+import { assertSkillsExist, checkUpdates, configPath, diffUpstream, getState, normalizeAll, readConfig, resolveContext, runAction, scanProjects, SkmError, statLine, updateMeta, writeConfig } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
 
   skm                     start the UI for the current dir and open the browser
-  skm list [--json]       table of global + local skills with status
+  skm list [--json] [--fav] [--tag <t>]   table of global + local skills with status
   skm doctor              list problems with the suggested fix
   skm normalize [name|--all] [--keep agents|claude] [--dry-run]
   skm activate|deactivate <name> [--local|--global]
   skm promote <name>      local -> global (copy)   [--overwrite]
-  skm pull <name>         global -> local (copy)   [--overwrite] [--target agents|claude]
+  skm pull <name...>      global -> local (copy, inactive ones too)   [--overwrite] [--target agents|claude]
+  skm fav|unfav <name...>   mark / unmark favorites   |   skm tags   tags in use with counts
+  skm tag|untag <name> <tag...>   add / remove tags
   skm delete <name> [--local|--global]   moves it to the system Trash
   skm outdated [--json]   check the GitHub source of each tracked global skill
   skm cost [--json] [--all]   context cost (estimated tokens) of active skills
@@ -26,7 +28,7 @@ const USAGE = `skm: skills manager
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
 Env: SKM_HOME overrides the home directory.`;
 
-const FLAGS_WITH_VALUE = new Set(['--keep', '--port', '--target']);
+const FLAGS_WITH_VALUE = new Set(['--keep', '--port', '--target', '--tag']);
 
 export function parseArgs(argv) {
   const out = { _: [], flags: {} };
@@ -83,19 +85,30 @@ function listAll(state) {
   return [...state.global, ...state.local];
 }
 
-function printList(state) {
+/** `--fav` / `--tag <t>` keep only matching skills (both given: favorites that carry the tag). */
+function filterState(state, flags) {
+  if (flags.tag === true || flags.tag === '') throw new SkmError('invalid', 'usage: skm list --tag <tag>');
+  const tag = flags.tag === undefined ? null : String(flags.tag).trim().toLowerCase();
+  if (!flags.fav && tag === null) return state;
+  const keep = (s) => (!flags.fav || s.meta.favorite) && (tag === null || s.meta.tags.includes(tag));
+  return { ...state, global: state.global.filter(keep), local: state.local.filter(keep) };
+}
+
+function printList(state, filtered) {
   const skills = listAll(state);
-  if (!skills.length) return console.log('no skills found');
-  const rows = [['SCOPE', 'NAME', 'STATE', 'STATUS', 'TOK', 'ORIGIN', 'ALSO IN'].map((h) => c.bold(h))];
+  if (!skills.length) return console.log(filtered ? 'no skills match' : 'no skills found');
+  const rows = [['SCOPE', 'NAME', 'FAV', 'STATE', 'STATUS', 'TOK', 'ORIGIN', 'TAGS', 'ALSO IN'].map((h) => c.bold(h))];
   for (const s of skills) {
     const color = STATUS_COLOR[s.status] ?? ((x) => x);
     rows.push([
       s.scope,
       s.name,
+      s.meta.favorite ? c.yellow('*') : '',
       s.active ? 'active' : c.dim('inactive'),
       color(s.status),
       String(s.cost?.listing ?? 0),
       s.origin ? `${s.origin.source ?? '-'}${s.origin.modified ? c.yellow(' [modified]') : ''}` : '-',
+      s.meta.tags.join(',') || '-',
       s.alsoIn.join(', '),
     ]);
   }
@@ -127,9 +140,14 @@ function resolveScope(state, name, flags, allowed = ['global', 'local']) {
 }
 
 function report(result, flags) {
-  if (flags.json) return console.log(JSON.stringify(result, null, 2));
+  if (flags.json) {
+    if (result.ok === false) process.exitCode = 1;
+    return console.log(JSON.stringify(result, null, 2));
+  }
   console.log(result.message);
   for (const ch of result.changes ?? []) console.log(`  ${ch}`);
+  for (const r of result.results ?? []) if (!r.ok) console.log(c.red(`  failed ${r.name}: ${r.error} [${r.code}]`));
+  if (result.ok === false) process.exitCode = 1;
   for (const sk of result.skipped ?? []) console.log(c.yellow(`  skipped ${sk}`));
 }
 
@@ -146,7 +164,7 @@ async function perform(opts, req, flags, { destructive = false } = {}) {
   if (destructive && !dryRun) {
     const plan = runAction(opts, { ...req, dryRun: true });
     for (const ch of plan.changes) console.log(`  ${ch}`);
-    const question = req.action === 'delete' ? deleteQuestion(req, plan) : `${req.action} ${req.name}?`;
+    const question = req.action === 'delete' ? deleteQuestion(req, plan) : `${req.action} ${req.names?.join(', ') ?? req.name}?`;
     if (!(await confirm(question, flags))) {
       console.log('aborted');
       return;
@@ -231,9 +249,36 @@ async function main(argv, opts = {}) {
 
   const state = getState(opts);
   switch (cmd) {
-    case 'list':
-      if (flags.json) return console.log(JSON.stringify(state, null, 2));
-      return printList(state);
+    case 'list': {
+      const shown = filterState(state, flags);
+      if (flags.json) return console.log(JSON.stringify(shown, null, 2));
+      return printList(shown, shown !== state);
+    }
+
+    case 'fav':
+    case 'unfav': {
+      const names = pos.slice(1);
+      if (!names.length) throw new SkmError('invalid', `usage: skm ${cmd} <name...>`);
+      assertSkillsExist(opts, names);
+      const result = names.map((n) => ({ name: n, meta: updateMeta(opts, { name: n, favorite: cmd === 'fav' }) }));
+      if (flags.json) return console.log(JSON.stringify({ ok: true, results: result }, null, 2));
+      return console.log(`${cmd === 'fav' ? 'favorited' : 'unfavorited'}: ${names.join(', ')}`);
+    }
+
+    case 'tag':
+    case 'untag': {
+      const tags = pos.slice(2);
+      if (!name || !tags.length) throw new SkmError('invalid', `usage: skm ${cmd} <name> <tag...>`);
+      const meta = updateMeta(opts, { name, [cmd === 'tag' ? 'addTags' : 'removeTags']: tags });
+      if (flags.json) return console.log(JSON.stringify({ ok: true, meta }, null, 2));
+      return console.log(`${name}: ${meta.tags.length ? meta.tags.join(', ') : 'no tags'}`);
+    }
+
+    case 'tags': {
+      if (flags.json) return console.log(JSON.stringify(state.tags, null, 2));
+      if (!state.tags.length) return console.log('no tags in use: add one with `skm tag <name> <tag>`');
+      return console.log(table([['TAG', 'SKILLS'].map((h) => c.bold(h)), ...state.tags.map((t) => [t.tag, String(t.count)])]));
+    }
 
     case 'doctor': {
       const bad = listAll(state).filter((s) => s.issues.length || s.status !== 'ok');
@@ -272,11 +317,12 @@ async function main(argv, opts = {}) {
 
     case 'promote':
     case 'pull': {
-      if (!name) throw new SkmError('invalid', `usage: skm ${cmd} <name>`);
+      if (!name) throw new SkmError('invalid', `usage: skm ${cmd} <name${cmd === 'pull' ? '...' : ''}>`);
+      const copy = { action: 'copyToLocal', scope: 'global', overwrite: Boolean(flags.overwrite), target: flags.target };
       const req =
         cmd === 'promote'
           ? { action: 'promote', scope: 'local', name, overwrite: Boolean(flags.overwrite) }
-          : { action: 'copyToLocal', scope: 'global', name, overwrite: Boolean(flags.overwrite), target: flags.target };
+          : pos.length > 2 ? { ...copy, names: pos.slice(1) } : { ...copy, name };
       return perform(opts, req, flags, { destructive: Boolean(flags.overwrite) });
     }
 

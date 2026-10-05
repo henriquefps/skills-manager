@@ -74,8 +74,8 @@ test('cli list: ORIGIN column and modified marker', () => {
   const home = updatableHome();
   let r = skm(home, ['list']);
   assert.match(r.stdout, /ORIGIN/);
-  assert.match(r.stdout, /good\s+active\s+ok\s+\d+\s+o\/good\s*$/m);
-  assert.match(r.stdout, /unlinked\s+active\s+needs-link\s+\d+\s+-\s*$/m);
+  assert.match(r.stdout, /good\s+active\s+ok\s+\d+\s+o\/good\s+-\s*$/m);
+  assert.match(r.stdout, /unlinked\s+active\s+needs-link\s+\d+\s+-\s+-\s*$/m);
   write(path.join(home, '.agents', 'skills', 'good', 'x.md'), 'edit');
   r = skm(home, ['list']);
   assert.match(r.stdout, /o\/good \[modified\]/);

@@ -5,6 +5,7 @@ import { costOf, totalsOf } from './cost.mjs';
 import { dirHash, inspect, parseDescription, walk } from './fsutil.mjs';
 import { lintSkill } from './lint.mjs';
 import { lockEntry, readLock } from './lock.mjs';
+import { metaFor, readMeta, tagCounts } from './meta.mjs';
 import { gitTreeHash } from './treehash.mjs';
 
 const IGNORED = new Set(['synced', 'node_modules']);
@@ -165,7 +166,9 @@ export function scanScope(opts, scope) {
     skills.push(buildSkill(scope, name, locs));
   }
   const lock = scope === 'global' ? readLock(ctx.home) : null;
+  const meta = readMeta(ctx);
   for (const s of skills) {
+    s.meta = metaFor(meta, s.name);
     const e = lockEntry(lock, s.name);
     if (e) s.origin = originOf(e, s.dir);
     delete s.dir;
@@ -181,7 +184,9 @@ export function getState(opts = {}) {
   const l = new Set(local.map((s) => s.name));
   for (const s of global) if (l.has(s.name)) s.alsoIn.push('local');
   for (const s of local) if (g.has(s.name)) s.alsoIn.push('global');
-  return { cwd: ctx.cwd, project: ctx.project, global, local, totals: totalsOf(global, local) };
+  const all = [...global, ...local];
+  const favorites = new Set(all.filter((s) => s.meta.favorite).map((s) => s.name)).size;
+  return { cwd: ctx.cwd, project: ctx.project, global, local, totals: totalsOf(global, local), tags: tagCounts(all), favorites };
 }
 
 export function getSkill(opts, scope, name) {

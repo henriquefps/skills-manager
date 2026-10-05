@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkUpdates, diffUpstream, getSkill, getState, projectContext, readConfig, resolveContext, runAction, scanProjects, SkmError, writeConfig } from './core/index.mjs';
+import { checkUpdates, diffUpstream, getSkill, getState, projectContext, readConfig, resolveContext, runAction, scanProjects, SkmError, updateMeta, writeConfig } from './core/index.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const MIME = {
@@ -48,6 +48,20 @@ function readBody(req, limit = 1 << 20) {
   });
 }
 
+/** Writes are same-origin only: a request carrying a foreign Origin header is refused. */
+function refuseCrossOrigin(req) {
+  if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) throw new SkmError('forbidden', 'cross-origin request refused');
+}
+
+async function readJson(req) {
+  try {
+    return JSON.parse((await readBody(req)) || '{}');
+  } catch (err) {
+    if (err instanceof SkmError) throw err;
+    throw new SkmError('invalid', 'request body is not valid JSON');
+  }
+}
+
 function serveStatic(res, pathname) {
   const rel = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
   const file = path.resolve(UI_DIR, `.${rel}`);
@@ -81,17 +95,14 @@ export function createServer(opts = {}) {
       // projects + config
       if (url.pathname === '/api/config' && req.method === 'GET') return sendJson(res, 200, readConfig(ctx));
       if (url.pathname === '/api/config' && req.method === 'PUT') {
-        if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) {
-          return sendJson(res, 403, { ok: false, error: 'cross-origin request refused', code: 'forbidden' });
-        }
-        let input;
-        try {
-          input = JSON.parse((await readBody(req)) || '{}');
-        } catch (err) {
-          if (err instanceof SkmError) throw err;
-          throw new SkmError('invalid', 'request body is not valid JSON');
-        }
-        return sendJson(res, 200, writeConfig(ctx, input));
+        refuseCrossOrigin(req);
+        return sendJson(res, 200, writeConfig(ctx, await readJson(req)));
+      }
+      if (url.pathname === '/api/meta' && req.method === 'POST') {
+        refuseCrossOrigin(req);
+        const body = await readJson(req);
+        const meta = updateMeta(body?.projectRoot === undefined ? ctx : projectContext(ctx, body.projectRoot), body);
+        return sendJson(res, 200, { ok: true, meta });
       }
       if (url.pathname === '/api/projects' && req.method === 'GET') return sendJson(res, 200, scanProjects(ctx));
 
@@ -101,17 +112,8 @@ export function createServer(opts = {}) {
         return sendJson(res, 200, getSkill(ctx, scope, url.searchParams.get('name')));
       }
       if (url.pathname === '/api/action' && req.method === 'POST') {
-        const origin = req.headers.origin;
-        if (origin && new URL(origin).host !== req.headers.host) {
-          return sendJson(res, 403, { ok: false, error: 'cross-origin request refused', code: 'forbidden' });
-        }
-        let body;
-        try {
-          body = JSON.parse((await readBody(req)) || '{}');
-        } catch (err) {
-          if (err instanceof SkmError) throw err;
-          throw new SkmError('invalid', 'request body is not valid JSON');
-        }
+        refuseCrossOrigin(req);
+        const body = await readJson(req);
         return sendJson(res, 200, runAction(body?.projectRoot === undefined ? ctx : projectContext(ctx, body.projectRoot), body));
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'unknown endpoint', code: 'not-found' });

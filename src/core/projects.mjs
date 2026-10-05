@@ -78,7 +78,7 @@ export function scanProjects(opts = {}, config) {
       projects.push({
         root: p.root,
         name: p.name,
-        skills: p.skills.map((s) => ({ name: s.name, active: s.active, status: s.status, cost: skillCost(s) })),
+        skills: p.skills.map((s) => ({ name: s.name, active: s.active, status: s.status, cost: skillCost(s), meta: s.meta })),
       });
     }
   }

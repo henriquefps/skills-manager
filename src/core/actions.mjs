@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assertName, resolveContext, SkmError } from './context.mjs';
-import { dirHash, moveSync } from './fsutil.mjs';
+import { dirHash, inspect, moveSync } from './fsutil.mjs';
 import { applyIgnoreOp, inactiveIgnoreOp } from './gitignore.mjs';
 import { locate, scanScope } from './scan.mjs';
 import { trashSync, trashTarget } from './trash.mjs';
@@ -177,8 +177,10 @@ function copyToLocal(ctx, { name, overwrite, target = 'claude', dryRun }) {
   if (!['agents', 'claude'].includes(target)) throw new SkmError('invalid', `invalid target: ${target}`);
   const l = ctx.dirs('local');
   const g = locate(ctx, 'global', name);
-  const src = [g.a, g.c].find((x) => x && x.kind !== 'broken-symlink');
-  if (!src) throw new SkmError('not-found', `no active global skill: ${name}`);
+  // Active copies first, then inactive ones (a real folder in ~/.claude/skills-inactive counts too). The source is never touched.
+  const gci = inspect(path.join(ctx.dirs('global').claudeInactive, name));
+  const src = [g.a, g.c, g.ia, gci].find((x) => x && x.kind !== 'broken-symlink');
+  if (!src) throw new SkmError('not-found', `no global skill: ${name}`);
   const existing = locate(ctx, 'local', name)[target === 'agents' ? 'a' : 'c'];
   const plan = [];
   if (existing) {
@@ -187,6 +189,27 @@ function copyToLocal(ctx, { name, overwrite, target = 'claude', dryRun }) {
   }
   plan.push({ op: 'copy', from: src.real, to: path.join(target === 'agents' ? l.agents : l.claude, name) });
   return run(plan, dryRun, `copied global/${name} to local (${target})`);
+}
+
+/** Copy several global skills; continues past failures and reports each one. */
+function copyManyToLocal(ctx, { names, overwrite, target = 'claude', dryRun }) {
+  if (!Array.isArray(names) || !names.length) throw new SkmError('invalid', 'names must be a non-empty array');
+  if (!ctx.project) throw new SkmError('no-project', 'no project detected from the current directory');
+  if (!['agents', 'claude'].includes(target)) throw new SkmError('invalid', `invalid target: ${target}`);
+  const results = [];
+  const changes = [];
+  for (const name of new Set(names)) {
+    try {
+      changes.push(...copyToLocal(ctx, { name: assertName(name), overwrite, target, dryRun }).changes);
+      results.push({ name, ok: true });
+    } catch (err) {
+      if (!(err instanceof SkmError)) throw err;
+      results.push({ name, ok: false, error: err.message, code: err.code });
+    }
+  }
+  const done = results.filter((r) => r.ok).length;
+  const message = `${dryRun ? 'dry run: ' : ''}copied ${done} of ${results.length} global skill(s) to local (${target})`;
+  return { ok: done === results.length, message, changes, results };
 }
 
 function del(ctx, { scope, name, dryRun }) {
@@ -212,6 +235,10 @@ export const ACTIONS = ['activate', 'deactivate', 'normalize', 'promote', 'copyT
 export function runAction(opts, req) {
   const ctx = resolveContext(opts);
   const { action, scope, keep, overwrite = false, target, dryRun = false, force = false } = req ?? {};
+  if (action === 'copyToLocal' && req?.names !== undefined) {
+    requireScope(scope ?? 'global', ['global']);
+    return copyManyToLocal(ctx, { names: req.names, overwrite, target, dryRun });
+  }
   const name = assertName(req?.name);
   switch (action) {
     case 'activate':

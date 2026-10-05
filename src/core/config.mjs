@@ -22,7 +22,7 @@ function collapseHome(abs, home) {
   return rel.startsWith('..') || path.isAbsolute(rel) ? abs : `~/${rel.split(path.sep).join('/')}`;
 }
 
-function readRaw(home) {
+export function readRaw(home) {
   try {
     const data = JSON.parse(fs.readFileSync(configPath(home), 'utf8'));
     return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
@@ -73,15 +73,9 @@ export function validateConfig(input, opts = {}) {
   return { projectRoots: roots, scanDepth: depth };
 }
 
-/**
- * Validate and persist (temp file + rename; created on first write). Keeps unknown fields. Roots under home are
- * stored as `~/...`. Returns the normalized config (absolute roots).
- */
-export function writeConfig(opts, input) {
-  const ctx = resolveContext(opts);
-  const cfg = validateConfig(input, ctx);
-  const file = configPath(ctx.home);
-  const next = { ...readRaw(ctx.home), projectRoots: cfg.projectRoots.map((r) => collapseHome(r, ctx.home)), scanDepth: cfg.scanDepth };
+/** Persist `next` (temp file + rename; the directory is created on first write). */
+function writeRaw(home, next) {
+  const file = configPath(home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   try {
@@ -91,5 +85,21 @@ export function writeConfig(opts, input) {
     fs.rmSync(tmp, { force: true });
     throw err;
   }
+}
+
+/** Read-modify-write of the raw file: `mutate(raw)` returns the next object; every key it keeps survives. */
+export function updateRaw(opts, mutate) {
+  const { home } = resolveContext(opts);
+  writeRaw(home, mutate(readRaw(home)));
+}
+
+/**
+ * Validate and persist (created on first write). Keeps every other key (`skills`, unknown fields). Roots under
+ * home are stored as `~/...`. Returns the normalized config (absolute roots).
+ */
+export function writeConfig(opts, input) {
+  const ctx = resolveContext(opts);
+  const cfg = validateConfig(input, ctx);
+  updateRaw(ctx, (raw) => ({ ...raw, projectRoots: cfg.projectRoots.map((r) => collapseHome(r, ctx.home)), scanDepth: cfg.scanDepth }));
   return cfg;
 }
