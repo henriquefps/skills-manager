@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>skm - Skills manager</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%23587a3a%27/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#list">Skip to skills</a>
+
+  <div class="page">
+    <header class="masthead">
+      <div class="eyebrow"><span class="label">Skills manager</span><span class="rule"></span></div>
+      <h1 id="title">Skills</h1>
+      <p class="deck" id="deck">Loading your skills.</p>
+      <p class="cwd" id="cwd"></p>
+    </header>
+
+    <section id="banner" class="banner" aria-live="polite" hidden></section>
+
+    <section class="toolbar" aria-label="Find skills">
+      <div class="tabs" role="tablist" aria-label="Scope">
+        <button class="tab" role="tab" id="tab-global" aria-controls="list" aria-selected="true" data-scope="global" type="button">Global <span class="count" id="count-global">0</span></button>
+        <button class="tab" role="tab" id="tab-local" aria-controls="list" aria-selected="false" data-scope="local" type="button" tabindex="-1">Local <span class="count" id="count-local">0</span></button>
+      </div>
+      <div class="search">
+        <label class="sr" for="search">Search skills by name or description</label>
+        <input id="search" type="search" placeholder="Search skills" autocomplete="off" spellcheck="false">
+        <kbd aria-hidden="true">/</kbd>
+      </div>
+      <div class="chips" id="chips" role="group" aria-label="Filter by status"></div>
+    </section>
+
+    <main id="list" class="list" role="tabpanel" aria-labelledby="tab-global" tabindex="-1"></main>
+  </div>
+
+  <dialog id="drawer" class="drawer" aria-labelledby="drawer-title"></dialog>
+
+  <dialog id="confirm" class="modal" aria-labelledby="confirm-title">
+    <form method="dialog" id="confirm-form">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-lead" class="lead"></p>
+      <div id="confirm-options" class="options"></div>
+      <div class="preview" aria-live="polite">
+        <div class="preview-label">Planned changes</div>
+        <div id="confirm-preview"></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="confirm-cancel">Cancel</button>
+        <button type="submit" class="btn primary" id="confirm-ok" value="ok">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
