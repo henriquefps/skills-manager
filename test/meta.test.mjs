@@ -227,7 +227,7 @@ test('api: POST /api/action batch copyToLocal with a failure in the middle', asy
 // ---- CLI -----------------------------------------------------------------
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'skm.mjs');
-const skm = (home, cwd, args) => spawnSync(process.execPath, [BIN, ...args], { cwd, env: { ...process.env, SKM_HOME: home, NO_COLOR: '1' }, input: '', encoding: 'utf8' });
+const skm = (home, cwd, args) => spawnSync(process.execPath, [BIN, ...args], { cwd, env: { ...process.env, FORCE_COLOR: undefined, SKM_HOME: home, NO_COLOR: '1' }, input: '', encoding: 'utf8' });
 
 test('cli: fav/tag/tags/list filters and columns', () => {
   const home = buildHome();

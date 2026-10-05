@@ -206,7 +206,7 @@ test('server: /api/config, /api/projects, projectRoot on /api/action', async () 
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'skm.mjs');
 const skm = (home, cwd, args) =>
-  spawnSync(process.execPath, [BIN, ...args], { cwd, env: { ...process.env, SKM_HOME: home, NO_COLOR: '1' }, input: '', encoding: 'utf8' });
+  spawnSync(process.execPath, [BIN, ...args], { cwd, env: { ...process.env, FORCE_COLOR: undefined, SKM_HOME: home, NO_COLOR: '1' }, input: '', encoding: 'utf8' });
 
 test('cli: projects add/rm/depth/config and scan output', () => {
   const { home, ws } = build();

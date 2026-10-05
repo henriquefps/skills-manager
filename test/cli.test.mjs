@@ -10,7 +10,7 @@ const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin',
 const skm = (home, args) =>
   spawnSync(process.execPath, [BIN, ...args], {
     cwd: home,
-    env: { ...process.env, SKM_HOME: home, NO_COLOR: '1' },
+    env: { ...process.env, FORCE_COLOR: undefined, SKM_HOME: home, NO_COLOR: '1' },
     input: '',
     encoding: 'utf8',
   });

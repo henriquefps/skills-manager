@@ -323,7 +323,7 @@ test('server: POST /api/project-meta writes meta, guards roots, same origin only
 // ---- CLI ----
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'skm.mjs');
-const skm = (h, args, cwd = h) => spawnSync(process.execPath, [BIN, ...args], { cwd, env: { ...process.env, SKM_HOME: h, NO_COLOR: '1' }, input: '', encoding: 'utf8' });
+const skm = (h, args, cwd = h) => spawnSync(process.execPath, [BIN, ...args], { cwd, env: { ...process.env, FORCE_COLOR: undefined, SKM_HOME: h, NO_COLOR: '1' }, input: '', encoding: 'utf8' });
 
 function cliHome() {
   const h = tmp();
