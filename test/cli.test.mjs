@@ -74,8 +74,8 @@ test('cli list: ORIGIN column and modified marker', () => {
   const home = updatableHome();
   let r = skm(home, ['list']);
   assert.match(r.stdout, /ORIGIN/);
-  assert.match(r.stdout, /good\s+active\s+ok\s+o\/good\s*$/m);
-  assert.match(r.stdout, /unlinked\s+active\s+needs-link\s+-\s*$/m);
+  assert.match(r.stdout, /good\s+active\s+ok\s+\d+\s+o\/good\s*$/m);
+  assert.match(r.stdout, /unlinked\s+active\s+needs-link\s+\d+\s+-\s*$/m);
   write(path.join(home, '.agents', 'skills', 'good', 'x.md'), 'edit');
   r = skm(home, ['list']);
   assert.match(r.stdout, /o\/good \[modified\]/);
@@ -112,4 +112,20 @@ test('cli update: non-interactive asks for --yes and changes nothing; --dry-run 
   assert.match(r.stderr, /\[modified\]/);
   r = skm(home, ['update', 'dup', '--yes']);
   assert.match(r.stderr, /\[not-tracked\]/);
+});
+
+test('cli list has a TOK column; cost, lint and diff subcommands', { skip: !supported }, () => {
+  const home = buildHome();
+  const list = skm(home, ['list']);
+  assert.match(list.stdout.split('\n')[0], /STATUS\s+TOK\s+ORIGIN/);
+  const cost = skm(home, ['cost', '--json']);
+  const c = JSON.parse(cost.stdout);
+  assert.ok(c.skills.every((s) => s.active) && c.totals.listingTokens > 0);
+  assert.match(skm(home, ['cost']).stdout, /tokens loaded in every session/);
+  const lint = skm(home, ['lint']);
+  assert.equal(lint.status, 1); // youtube_transcript_skill has no SKILL.md (error)
+  assert.match(lint.stdout, /no-skill-md/);
+  assert.equal(skm(home, ['lint', 'good']).status, 0);
+  assert.equal(skm(home, ['lint', 'nope']).status, 1);
+  assert.match(skm(home, ['diff', 'good']).stderr, /not-tracked/);
 });

@@ -144,3 +144,31 @@ export function updateSkill(opts, { name, force = false, dryRun = false }) {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+// ---- upstream clone (shared with diff) -----------------------------------
+
+/**
+ * Shallow-clone `entry.sourceUrl` into a temp dir, call `fn({ src, newHash, folder })` with the skill folder
+ * of the clone, and always clean the temp dir. Throws `network` / `removed-upstream` like update does.
+ */
+export async function withUpstream(ctx, entry, fn) {
+  const git = ctx.git ?? defaultGit;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skm-upstream-'));
+  try {
+    const clone = path.join(tmp, 'repo');
+    try {
+      git(['clone', '--depth', '1', entry.sourceUrl, clone]);
+    } catch (err) {
+      throw new SkmError('network', `could not clone ${entry.sourceUrl}: ${String(err.stderr || err.message).trim().split('\n').pop()}`);
+    }
+    const folder = folderOf(entry.skillPath);
+    const src = path.join(clone, folder);
+    if (!fs.statSync(src, { throwIfNoEntry: false })?.isDirectory()) {
+      throw new SkmError('removed-upstream', `${folder || 'the skill folder'} no longer exists in ${entry.source}`);
+    }
+    const newHash = git(['rev-parse', folder ? `HEAD:${folder}` : 'HEAD^{tree}'], { cwd: clone }).trim();
+    return await fn({ src, newHash, folder });
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
