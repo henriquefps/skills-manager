@@ -21,11 +21,16 @@ Canonical store (global): `~/.agents/skills/<name>/` (real folder).
 Claude view (global): `~/.claude/skills/<name>` is a **symlink** (relative:
 `../../.agents/skills/<name>`) to the canonical folder.
 Inactive (global): `~/.agents/skills-inactive/<name>/`; the `~/.claude/skills` symlink is removed.
-Trash: `~/.agents/skills-trash/<name>-<timestamp>/` (delete never unlinks for real).
+Trash: the real system Trash, never a folder inside the repo or `~/.agents`. macOS: `~/.Trash/<name>`
+(on a name clash, ` <YYYY-MM-DD HH.MM.SS>` is appended, as Finder does). Linux (XDG):
+`~/.local/share/Trash/files/<name>` plus `info/<name>.trashinfo` (`Path`, `DeletionDate`), unique name on a clash.
+Other platforms: `SkmError("unsupported")`. The folder is moved (`moveSync`, so cross-device works),
+so macOS "Put Back" is not guaranteed; restore by hand. Symlinks are only unlinked. See `src/core/trash.mjs`;
+`home`, `platform` and `now` are injectable.
 
 Local (project) scope, `<root>` = nearest ancestor of cwd with `.git`, `.agents` or `.claude`, else cwd:
 `<root>/.agents/skills`, `<root>/.claude/skills`, `<root>/.agents/skills-inactive`,
-`<root>/.claude/skills-inactive`, `<root>/.agents/skills-trash`. A local skill may live in
+`<root>/.claude/skills-inactive`. A local skill may live in
 either root as a real folder (both copies is allowed, not required). Local inactive = moved
 to the `skills-inactive` sibling of whichever root(s) held it. When a local `deactivate` moves a
 folder there, it appends `skills-inactive/` to `<root>/.gitignore` unless that file is missing (never
@@ -58,7 +63,7 @@ replacing the claude copy with the symlink; `diverged` is never auto-resolved: n
 | `normalize` | global | see above; optional `keep: "agents"\|"claude"` for diverged |
 | `promote` | local -> global | **copy** local skill to `~/.agents/skills/<name>` + claude symlink; fails if exists unless `overwrite` |
 | `copyToLocal` | global -> local | **copy** to `<root>/.claude/skills/<name>` (or `.agents/skills` via `target: "agents"`); fails if exists unless `overwrite` |
-| `delete` | global/local | move to trash (global also removes claude symlink) |
+| `delete` | global/local | move real folders to the system Trash, unlink symlinks (global also removes claude symlink) |
 
 Every action takes `dryRun: true` and returns the planned `changes` without touching disk.
 

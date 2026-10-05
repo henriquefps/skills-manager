@@ -30,7 +30,6 @@ export function scopeDirs(base) {
     claude: path.join(base, '.claude', 'skills'),
     agentsInactive: path.join(base, '.agents', 'skills-inactive'),
     claudeInactive: path.join(base, '.claude', 'skills-inactive'),
-    trash: path.join(base, '.agents', 'skills-trash'),
   };
 }
 
@@ -44,6 +43,8 @@ export function resolveContext(opts = {}) {
   return {
     resolved: true,
     home,
+    platform: opts.platform ?? process.platform,
+    now: opts.now,
     cwd,
     project: root ? { root, name: path.basename(root) } : null,
     dirs(scope) {

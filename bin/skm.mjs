@@ -12,7 +12,7 @@ const USAGE = `skm: skills manager
   skm activate|deactivate <name> [--local|--global]
   skm promote <name>      local -> global (copy)   [--overwrite]
   skm pull <name>         global -> local (copy)   [--overwrite] [--target agents|claude]
-  skm delete <name> [--local|--global]
+  skm delete <name> [--local|--global]   moves it to the system Trash
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
 Env: SKM_HOME overrides the home directory.`;
@@ -95,7 +95,7 @@ function printList(state) {
 
 async function confirm(question, flags) {
   if (flags.yes) return true;
-  if (!process.stdin.isTTY) throw new SkmError('invalid', 'confirmation required: re-run with --yes (not a TTY)');
+  if (!process.stdin.isTTY) throw new SkmError('invalid', `${question} [y/N]\nconfirmation required: re-run with --yes (not a TTY)`);
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     return /^y(es)?$/i.test((await rl.question(`${question} [y/N] `)).trim());
@@ -121,12 +121,21 @@ function report(result, flags) {
   for (const sk of result.skipped ?? []) console.log(c.yellow(`  skipped ${sk}`));
 }
 
+/** Plain-language warning for delete: what goes, the exact Trash destination (from the dry-run plan), how to get it back. */
+function deleteQuestion(req, plan) {
+  const dests = plan.changes.map((ch) => /^trash .+? -> (.+)$/.exec(ch)?.[1]).filter(Boolean);
+  const where = dests.length ? ` (${dests.join(', ')})` : '';
+  return `${req.name} will be removed from ${req.scope} and moved to the system Trash${where}.\n`
+    + 'To get it back, restore it from the Trash by hand.\nContinue?';
+}
+
 async function perform(opts, req, flags, { destructive = false } = {}) {
   const dryRun = Boolean(flags['dry-run']);
   if (destructive && !dryRun) {
     const plan = runAction(opts, { ...req, dryRun: true });
     for (const ch of plan.changes) console.log(`  ${ch}`);
-    if (!(await confirm(`${req.action} ${req.name}?`, flags))) {
+    const question = req.action === 'delete' ? deleteQuestion(req, plan) : `${req.action} ${req.name}?`;
+    if (!(await confirm(question, flags))) {
       console.log('aborted');
       return;
     }

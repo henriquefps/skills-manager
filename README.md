@@ -10,7 +10,7 @@ skills (in the project you are in) at the same time.
 
 - No dependencies, no build step. Node.js 20 or newer is all you need.
 - Runs on `127.0.0.1` only; nothing leaves your machine.
-- Never really deletes: delete moves the skill to a trash folder.
+- Never really deletes: delete moves the skill to the system Trash (macOS `~/.Trash`, Linux XDG trash).
 
 ## Install
 
@@ -47,7 +47,7 @@ Check it with `skm --help`.
 | Global central store | `~/.agents/skills/<name>/` (real folder) |
 | Claude view (global) | `~/.claude/skills/<name>` (symlink to the central folder) |
 | Inactive global skills | `~/.agents/skills-inactive/<name>/` |
-| Global trash | `~/.agents/skills-trash/<name>-<timestamp>/` |
+| Deleted skills | The system Trash: `~/.Trash` (macOS) or `~/.local/share/Trash` (Linux), outside the repo |
 | Local skills | `<project>/.claude/skills` and/or `<project>/.agents/skills` |
 | Inactive local skills | `skills-inactive` next to where the skill was |
 
@@ -71,7 +71,7 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - **activate/deactivate** a skill with its toggle;
 - **Promote** a local skill to global, or **Copy to local** a global one;
 - **Normalize** a skill with a problem (for `diverged`, pick which side to keep);
-- **Delete** (goes to trash), with a confirmation;
+- **Delete** (moves it to the system Trash), with a confirmation that shows the exact destination;
 - open **Details** to see the `SKILL.md` and the file tree;
 - use **Fix all** in the problems banner, with a preview of what will change.
 
@@ -89,7 +89,7 @@ skm activate <name>       [--local|--global]
 skm deactivate <name>     [--local|--global]
 skm promote <name>        local -> global (copy)   [--overwrite]
 skm pull <name>           global -> local (copy)   [--overwrite] [--target agents|claude]
-skm delete <name>         [--local|--global]
+skm delete <name>         [--local|--global]   # moves to the system Trash; restore it from there by hand
 ```
 
 General options: `--yes` (skip confirmation), `--dry-run` (only show what would happen),

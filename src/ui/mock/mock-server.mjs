@@ -126,11 +126,10 @@ function act(d, b) {
       return { body: { ok: true, message: `Copied ${s.name} to ${path.replace(ROOT, '.')}.`, changes: [`copy ${s.locations[0].path} -> ${path}`] } };
     }
     case 'delete': {
-      const base = g ? `${HOME}/.agents/skills-trash` : `${ROOT}/.agents/skills-trash`;
-      const changes = [`move ${s.locations[0].path} -> ${base}/${s.name}-20261005-1200`];
+      const changes = [`trash ${s.locations[0].path} -> ${HOME}/.Trash/${s.name}`];
       if (g) changes.push(`remove ${HOME}/.claude/skills/${s.name}`);
       if (!b.dryRun) { db[b.scope] = db[b.scope].filter((x) => x !== s); link(); }
-      return { body: { ok: true, message: `Moved ${s.name} to trash.`, changes } };
+      return { body: { ok: true, message: `Moved ${s.scope}/${s.name} to the system Trash (${HOME}/.Trash/${s.name}).`, changes } };
     }
     default:
       return err('bad-action', `Unknown action ${b.action}.`, 400);

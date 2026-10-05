@@ -103,15 +103,13 @@ test('normalize: needs-link, duplicate, claude-only, broken, wrong-link', () => 
 
 test('normalize: diverged needs keep, trashes the loser', () => {
   const home = buildHome();
-  const o = { home, cwd: home };
+  const o = { home, cwd: home, platform: 'darwin' };
   assert.throws(() => runAction(o, { action: 'normalize', name: 'split' }), { code: 'diverged' });
   runAction(o, { action: 'normalize', name: 'split', keep: 'claude' });
   const md = fs.readFileSync(path.join(home, '.agents', 'skills', 'split', 'SKILL.md'), 'utf8');
   assert.match(md, /claude version/);
   assert.equal(byName(scanScope(o, 'global'), 'split').status, 'ok');
-  const trash = fs.readdirSync(path.join(home, '.agents', 'skills-trash'));
-  assert.equal(trash.length, 1);
-  assert.match(trash[0], /^split-.*-agents$/);
+  assert.ok(fs.existsSync(path.join(home, '.Trash', 'split', 'SKILL.md')));
 });
 
 test('normalizeAll skips diverged and reports it', () => {
@@ -157,26 +155,98 @@ test('local deactivate / activate round trip', () => {
   assert.equal(byName(scanScope(o, 'local'), 'both').active, true);
 });
 
-test('delete goes to trash and removes the claude symlink', () => {
+test('delete (mac): global unlinks the claude symlink, the real folder lands in ~/.Trash', () => {
   const home = buildHome();
-  const o = { home, cwd: home };
-  runAction(o, { action: 'delete', scope: 'global', name: 'good' });
+  const o = { home, cwd: home, platform: 'darwin' };
+  const dry = runAction(o, { action: 'delete', scope: 'global', name: 'good', dryRun: true });
+  const dest = path.join(home, '.Trash', 'good');
+  assert.deepEqual(dry.changes, [
+    `unlink ${path.join(home, '.claude', 'skills', 'good')}`,
+    `trash ${path.join(home, '.agents', 'skills', 'good')} -> ${dest}`,
+  ]);
+  assert.match(dry.message, new RegExp(`^dry run: moved global/good to the system Trash \\(.*${dest}\\)$`));
+  assert.equal(fs.existsSync(path.join(home, '.Trash')), false); // dryRun writes nothing
+  assert.ok(fs.existsSync(path.join(home, '.agents', 'skills', 'good')));
+
+  const r = runAction(o, { action: 'delete', scope: 'global', name: 'good' });
+  assert.ok(r.message.includes(dest));
+  assert.deepEqual(r.changes, dry.changes);
   assert.equal(fs.existsSync(path.join(home, '.claude', 'skills', 'good')), false);
-  assert.equal(fs.lstatSync(path.join(home, '.claude', 'skills'), {}).isDirectory(), true);
-  const trash = fs.readdirSync(path.join(home, '.agents', 'skills-trash'));
-  assert.equal(trash.length, 1);
-  assert.ok(fs.existsSync(path.join(home, '.agents', 'skills-trash', trash[0], 'SKILL.md')));
+  assert.equal(fs.lstatSync(path.join(home, '.claude', 'skills')).isDirectory(), true);
+  assert.ok(fs.existsSync(path.join(dest, 'SKILL.md')));
+  assert.equal(fs.existsSync(path.join(home, '.agents', 'skills', 'good')), false);
   assert.equal(byName(scanScope(o, 'global'), 'good'), undefined);
-  // broken symlink: unlinked, not trashed
-  runAction(o, { action: 'delete', scope: 'global', name: 'gone' });
-  assert.equal(fs.readdirSync(path.join(home, '.agents', 'skills-trash')).length, 1);
+  // broken symlink: unlinked, nothing trashed
+  const gone = runAction(o, { action: 'delete', scope: 'global', name: 'gone' });
+  assert.equal(gone.message, 'moved global/gone');
+  assert.deepEqual(fs.readdirSync(path.join(home, '.Trash')), ['good']);
   assert.throws(() => runAction(o, { action: 'delete', scope: 'global', name: 'nope' }), { code: 'not-found' });
+});
+
+test('delete (mac): name collision in ~/.Trash gets a Finder-style timestamp', () => {
+  const home = buildHome();
+  mkSkill(path.join(home, '.Trash'), 'good');
+  const o = { home, cwd: home, platform: 'darwin', now: new Date(2026, 9, 5, 20, 31, 7) };
+  runAction(o, { action: 'delete', scope: 'global', name: 'good' });
+  const dest = path.join(home, '.Trash', 'good 2026-10-05 20.31.07');
+  assert.ok(fs.existsSync(path.join(dest, 'SKILL.md')));
+  assert.ok(fs.existsSync(path.join(home, '.Trash', 'good', 'SKILL.md'))); // the old one is untouched
+});
+
+test('delete (mac): active and inactive copies of one name get distinct trash slots', () => {
+  const home = buildHome();
+  mkSkill(path.join(home, '.agents', 'skills-inactive'), 'good');
+  const o = { home, cwd: home, platform: 'darwin', now: new Date(2026, 9, 5, 20, 31, 7) };
+  runAction(o, { action: 'delete', scope: 'global', name: 'good' });
+  assert.deepEqual(fs.readdirSync(path.join(home, '.Trash')).sort(), ['good', 'good 2026-10-05 20.31.07']);
+});
+
+test('delete (linux): XDG trash with a matching .trashinfo, unique name on collision', () => {
+  const home = buildHome();
+  const o = { home, cwd: home, platform: 'linux', now: new Date(2026, 9, 5, 20, 31, 7) };
+  const trash = path.join(home, '.local', 'share', 'Trash');
+  const original = path.join(home, '.agents', 'skills', 'good');
+  runAction(o, { action: 'delete', scope: 'global', name: 'good' });
+  assert.ok(fs.existsSync(path.join(trash, 'files', 'good', 'SKILL.md')));
+  assert.equal(
+    fs.readFileSync(path.join(trash, 'info', 'good.trashinfo'), 'utf8'),
+    `[Trash Info]\nPath=${original}\nDeletionDate=2026-10-05T20:31:07\n`,
+  );
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'skills', 'good')), false);
+  // same name again: files/ and info/ stay paired under a unique name
+  mkSkill(path.join(home, '.agents', 'skills'), 'good');
+  runAction(o, { action: 'delete', scope: 'global', name: 'good' });
+  const unique = 'good 2026-10-05 20.31.07';
+  assert.ok(fs.existsSync(path.join(trash, 'files', unique, 'SKILL.md')));
+  assert.match(fs.readFileSync(path.join(trash, 'info', `${unique}.trashinfo`), 'utf8'), /^\[Trash Info\]\nPath=.*\/good\n/);
+  assert.deepEqual(fs.readdirSync(path.join(trash, 'files')).sort(), ['good', unique]);
+  assert.deepEqual(fs.readdirSync(path.join(trash, 'info')).sort(), [`${unique}.trashinfo`, 'good.trashinfo']);
+});
+
+test('delete: unsupported platform throws and touches nothing', () => {
+  const home = buildHome();
+  for (const dryRun of [true, false]) {
+    assert.throws(
+      () => runAction({ home, cwd: home, platform: 'win32' }, { action: 'delete', scope: 'global', name: 'good', dryRun }),
+      (e) => e.code === 'unsupported' && /win32/.test(e.message) && /by hand/.test(e.message),
+    );
+  }
+  assert.ok(fs.existsSync(path.join(home, '.agents', 'skills', 'good', 'SKILL.md')));
+  assert.ok(fs.lstatSync(path.join(home, '.claude', 'skills', 'good')).isSymbolicLink());
+});
+
+test('delete (local): the real folder goes to the home trash, not into the project', () => {
+  const home = buildHome();
+  const root = buildProject(home);
+  const o = { home, cwd: root, platform: 'darwin' };
+  runAction(o, { action: 'delete', scope: 'local', name: 'both' });
+  assert.ok(fs.existsSync(path.join(home, '.Trash', 'both')));
 });
 
 test('promote copies local -> global with symlink; exists unless overwrite', () => {
   const home = buildHome();
   const root = buildProject(home);
-  const o = { home, cwd: root };
+  const o = { home, cwd: root, platform: 'darwin' };
   runAction(o, { action: 'promote', scope: 'local', name: 'localonly' });
   assert.ok(fs.existsSync(path.join(root, '.claude', 'skills', 'localonly', 'SKILL.md'))); // copy, not move
   assert.equal(byName(scanScope(o, 'global'), 'localonly').status, 'ok');
@@ -186,13 +256,12 @@ test('promote copies local -> global with symlink; exists unless overwrite', () 
   assert.ok(dry.changes.length >= 3);
   runAction(o, { action: 'promote', scope: 'local', name: 'localonly', overwrite: true });
   assert.equal(byName(scanScope(o, 'global'), 'localonly').description, 'new');
-  assert.equal(fs.readdirSync(path.join(home, '.agents', 'skills-trash')).length, 1);
 });
 
 test('copyToLocal: default claude target, agents target, exists/overwrite, no project', () => {
   const home = buildHome();
   const root = buildProject(home);
-  const o = { home, cwd: root };
+  const o = { home, cwd: root, platform: 'darwin' };
   runAction(o, { action: 'copyToLocal', scope: 'global', name: 'unlinked' });
   assert.ok(fs.existsSync(path.join(root, '.claude', 'skills', 'unlinked', 'SKILL.md')));
   assert.equal(fs.lstatSync(path.join(root, '.claude', 'skills', 'unlinked')).isSymbolicLink(), false);
@@ -200,7 +269,7 @@ test('copyToLocal: default claude target, agents target, exists/overwrite, no pr
   assert.ok(fs.existsSync(path.join(root, '.agents', 'skills', 'unlinked', 'SKILL.md')));
   assert.throws(() => runAction(o, { action: 'copyToLocal', name: 'unlinked' }), { code: 'exists' });
   runAction(o, { action: 'copyToLocal', name: 'unlinked', overwrite: true });
-  assert.equal(fs.readdirSync(path.join(root, '.agents', 'skills-trash')).length, 1);
+  assert.equal(fs.readdirSync(path.join(home, '.Trash')).length, 1);
   assert.throws(() => runAction({ home, cwd: home }, { action: 'copyToLocal', name: 'good' }), { code: 'no-project' });
 });
 

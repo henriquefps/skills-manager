@@ -4,12 +4,14 @@ import { assertName, resolveContext, SkmError } from './context.mjs';
 import { dirHash, moveSync } from './fsutil.mjs';
 import { applyIgnoreOp, inactiveIgnoreOp } from './gitignore.mjs';
 import { locate, scanScope } from './scan.mjs';
+import { trashSync, trashTarget } from './trash.mjs';
 
 // ---- plan executor -------------------------------------------------------
 
 const describe = (op) => {
   switch (op.op) {
     case 'move': return `move ${op.from} -> ${op.to}`;
+    case 'trash': return `trash ${op.from} -> ${op.target.dest}`;
     case 'copy': return `copy ${op.from} -> ${op.to}`;
     case 'symlink': return `symlink ${op.path} -> ${op.target}`;
     case 'unlink': return `unlink ${op.path}`;
@@ -21,6 +23,7 @@ const describe = (op) => {
 function apply(op) {
   switch (op.op) {
     case 'move': return moveSync(op.from, op.to);
+    case 'trash': return trashSync(op.from, op.target);
     case 'copy':
       fs.mkdirSync(path.dirname(op.to), { recursive: true });
       return fs.cpSync(op.from, op.to, { recursive: true, dereference: true });
@@ -47,19 +50,14 @@ const claudeLink = (d, name) => ({
   target: path.relative(d.claude, path.join(d.agents, name)),
 });
 
-function trashPath(dir, name, tag = '') {
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-  const base = path.join(dir, `${name}-${stamp}${tag}`);
-  let p = base;
-  for (let i = 2; fs.existsSync(p); i++) p = `${base}-${i}`;
-  return p;
-}
-
-/** Trash a real folder, or just unlink a symlink. */
-function disposeOps(loc, trashDir, name, tag = '') {
-  if (!loc) return [];
-  if (loc.kind === 'dir') return [move(loc.path, trashPath(trashDir, name, tag))];
-  return [unlink(loc.path)];
+/** Planner for moves to the system Trash; destinations are reserved so one plan never reuses a slot. */
+function trasher(ctx) {
+  const taken = new Set();
+  const now = ctx.now ?? new Date();
+  const trash = (from) => ({ op: 'trash', from, target: trashTarget(from, { home: ctx.home, platform: ctx.platform, now, taken }) });
+  /** Trash a real folder, or just unlink a symlink. */
+  trash.dispose = (loc) => (!loc ? [] : loc.kind === 'dir' ? [trash(loc.path)] : [unlink(loc.path)]);
+  return trash;
 }
 
 const requireScope = (scope, allowed) => {
@@ -125,6 +123,7 @@ function deactivate(ctx, { scope, name, dryRun }) {
 
 function normalizePlan(ctx, name, keep) {
   const d = ctx.dirs('global');
+  const trash = trasher(ctx);
   const { a, c } = locate(ctx, 'global', name);
   if (!a && !c) throw new SkmError('not-found', `no active global skill: ${name}`);
   if (keep && !['agents', 'claude'].includes(keep)) throw new SkmError('invalid', `invalid keep: ${keep}`);
@@ -145,8 +144,8 @@ function normalizePlan(ctx, name, keep) {
   else if (dirHash(a.real) === dirHash(c.real)) plan.push({ op: 'rm', path: c.path }, link());
   else {
     if (!keep) throw new SkmError('diverged', `${name}: agents and claude copies differ; pass keep: "agents" or "claude"`);
-    if (keep === 'agents') plan.push(move(c.path, trashPath(d.trash, name, '-claude')), link());
-    else plan.push(move(a.path, trashPath(d.trash, name, '-agents')), move(c.path, aPath), link());
+    if (keep === 'agents') plan.push(trash(c.path), link());
+    else plan.push(trash(a.path), move(c.path, aPath), link());
   }
   return plan;
 }
@@ -158,6 +157,7 @@ function normalize(ctx, { name, keep, dryRun }) {
 
 function promote(ctx, { name, overwrite, dryRun }) {
   const g = ctx.dirs('global');
+  const trash = trasher(ctx);
   const l = locate(ctx, 'local', name);
   const src = [l.a, l.c].find((x) => x && x.kind !== 'broken-symlink');
   if (!src) throw new SkmError('not-found', `no active local skill: ${name}`);
@@ -165,7 +165,7 @@ function promote(ctx, { name, overwrite, dryRun }) {
   const plan = [];
   if (dest.a || dest.c) {
     if (!overwrite) throw new SkmError('exists', `global skill already exists: ${name} (use overwrite)`);
-    plan.push(...disposeOps(dest.a, g.trash, name, '-agents'), ...disposeOps(dest.c, g.trash, name, '-claude'));
+    plan.push(...trash.dispose(dest.a), ...trash.dispose(dest.c));
   }
   plan.push({ op: 'copy', from: src.real, to: path.join(g.agents, name) }, claudeLink(g, name));
   return run(plan, dryRun, `promoted local/${name} to global`);
@@ -182,25 +182,25 @@ function copyToLocal(ctx, { name, overwrite, target = 'claude', dryRun }) {
   const plan = [];
   if (existing) {
     if (!overwrite) throw new SkmError('exists', `local skill already exists: ${existing.path} (use overwrite)`);
-    plan.push(...disposeOps(existing, l.trash, name));
+    plan.push(...trasher(ctx).dispose(existing));
   }
   plan.push({ op: 'copy', from: src.real, to: path.join(target === 'agents' ? l.agents : l.claude, name) });
   return run(plan, dryRun, `copied global/${name} to local (${target})`);
 }
 
 function del(ctx, { scope, name, dryRun }) {
-  const d = ctx.dirs(scope);
   const l = locate(ctx, scope, name);
   const all = [l.a, l.c, l.ia, l.ic].filter(Boolean);
   if (!all.length) throw new SkmError('not-found', `skill not found: ${scope}/${name}`);
+  const trash = trasher(ctx);
   const plan = [];
-  // Links first, so nothing dangles; real folders go to the trash, never unlinked for real.
+  // Links first, so nothing dangles; real folders go to the system Trash, symlinks are only unlinked.
   for (const loc of [l.c, l.a]) if (loc && loc.kind !== 'dir') plan.push(unlink(loc.path));
-  if (l.a?.kind === 'dir') plan.push(move(l.a.path, trashPath(d.trash, name)));
-  if (l.c?.kind === 'dir') plan.push(move(l.c.path, trashPath(d.trash, name, '-claude')));
-  if (l.ia) plan.push(...disposeOps(l.ia, d.trash, name, '-inactive'));
-  if (l.ic) plan.push(...disposeOps(l.ic, d.trash, name, '-claude-inactive'));
-  return run(plan, dryRun, `moved ${scope}/${name} to trash`);
+  for (const loc of [l.a, l.c, l.ia, l.ic]) if (loc?.kind === 'dir') plan.push(trash(loc.path));
+  for (const loc of [l.ia, l.ic]) if (loc && loc.kind !== 'dir') plan.push(unlink(loc.path));
+  const dests = plan.filter((op) => op.op === 'trash').map((op) => op.target.dest);
+  const where = dests.length ? ` to the system Trash (${dests.join(', ')})` : '';
+  return run(plan, dryRun, `moved ${scope}/${name}${where}`);
 }
 
 // ---- entry points --------------------------------------------------------

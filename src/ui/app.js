@@ -453,12 +453,16 @@
 
   async function remove(s) {
     const base = { action: 'delete', scope: s.scope, name: s.name };
+    // The destination comes from the dry-run plan, so the lead names the exact place.
+    const dry = await safeDry(base);
+    const dests = ((dry && dry.changes) || []).map((ch) => /^trash .+? -> (.+)$/.exec(ch)).filter(Boolean).map((m) => m[1]);
+    const where = dests.length ? ` (${dests.join(', ')})` : '';
     const ok = await confirmDialog({
       title: `Delete ${s.name}`,
-      lead: `Moves the ${s.scope} skill to the trash folder. You can restore it from there by hand.`,
-      confirmLabel: 'Move to trash',
+      lead: `${s.name} will be removed from ${s.scope} and moved to the system Trash${where}. To get it back, restore it from the Trash by hand.`,
+      confirmLabel: 'Move to Trash',
       danger: true,
-      preview: async () => previewOf(await safeDry(base)),
+      preview: async () => previewOf(dry),
     });
     if (ok) await perform(s, base);
   }
