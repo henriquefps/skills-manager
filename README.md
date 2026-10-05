@@ -73,7 +73,8 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - **Normalize** a skill with a problem (for `diverged`, pick which side to keep);
 - **Delete** (moves it to the system Trash), with a confirmation that shows the exact destination;
 - open **Details** to see the `SKILL.md` and the file tree;
-- use **Fix all** in the problems banner, with a preview of what will change.
+- use **Fix all** in the problems banner, with a preview of what will change;
+- press **Check for updates** to see which tracked skills are outdated, and **Update** them one by one.
 
 Options: `--port <n>` picks the port (if it is taken, the next free one is used) and
 `--no-open` skips opening the browser.
@@ -101,6 +102,8 @@ General options: `--yes` (skip confirmation), `--dry-run` (only show what would 
 If the same name exists in both global and local, pass `--local` or `--global`.
 
 ## Checking and updating skills
+
+![skm: skills with updates available](docs/img/screenshot-updates.png)
 
 Skills installed with `npx skills` are recorded in `~/.agents/.skill-lock.json` (repo, path in the
 repo and the git tree hash of the folder). skm reads it, never needs it, and shows the repo in the
