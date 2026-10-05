@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline/promises';
-import { checkUpdates, getState, normalizeAll, runAction, SkmError } from '../src/core/index.mjs';
+import { checkUpdates, configPath, getState, normalizeAll, readConfig, resolveContext, runAction, scanProjects, SkmError, writeConfig } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -15,6 +17,8 @@ const USAGE = `skm: skills manager
   skm delete <name> [--local|--global]   moves it to the system Trash
   skm outdated [--json]   check the GitHub source of each tracked global skill
   skm update <name>|--all [--force]   update from the source; the old version goes to the system Trash
+  skm projects [--json]   scan the configured project roots (repeated skills flagged)
+  skm projects add|rm <path>   |   skm projects depth <n>   |   skm config
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
 Env: SKM_HOME overrides the home directory.`;
@@ -147,6 +151,51 @@ async function perform(opts, req, flags, { destructive = false } = {}) {
   report(runAction(opts, { ...req, dryRun }), flags);
 }
 
+// ---- projects ------------------------------------------------------------
+
+async function projectsCommand(opts, [sub, arg], flags) {
+  const ctx = resolveContext(opts);
+  const cfg = readConfig(ctx);
+  const target = () => {
+    if (!arg) throw new SkmError('invalid', `usage: skm projects ${sub} <path>`);
+    return path.resolve(ctx.cwd, arg.startsWith('~') ? path.join(ctx.home, arg.slice(1)) : arg);
+  };
+  if (sub === 'add') {
+    const next = writeConfig(ctx, { projectRoots: [...cfg.projectRoots, target()] });
+    return console.log(`project roots: ${next.projectRoots.join(', ')}`);
+  }
+  if (sub === 'rm') {
+    const t = target();
+    if (!cfg.projectRoots.includes(t)) throw new SkmError('not-found', `not a configured project root: ${t}`);
+    const next = writeConfig(ctx, { projectRoots: cfg.projectRoots.filter((r) => r !== t) });
+    return console.log(next.projectRoots.length ? `project roots: ${next.projectRoots.join(', ')}` : 'no project roots left');
+  }
+  if (sub === 'depth') {
+    if (!/^\d+$/.test(arg ?? '')) throw new SkmError('invalid', 'usage: skm projects depth <1-6>');
+    return console.log(`scan depth: ${writeConfig(ctx, { scanDepth: Number(arg) }).scanDepth}`);
+  }
+  if (sub) throw new SkmError('invalid', `unknown projects subcommand: ${sub}`);
+
+  const scan = scanProjects(ctx);
+  if (flags.json) return console.log(JSON.stringify(scan, null, 2));
+  if (!scan.roots.length) return console.log('no project roots configured: add one with `skm projects add <path>`');
+  console.log(c.dim(`roots: ${scan.roots.join(', ')} (depth ${cfg.scanDepth})`));
+  if (!scan.projects.length) return console.log('no projects with skills found');
+  const rows = [['PROJECT', 'SKILLS', 'TOK', 'PATH'].map((h) => c.bold(h))];
+  for (const p of scan.projects) {
+    const active = p.skills.filter((s) => s.active);
+    rows.push([p.name, `${active.length}${active.length < p.skills.length ? ` (+${p.skills.length - active.length} inactive)` : ''}`, String(active.reduce((n, s) => n + s.cost.listing, 0)), p.root]);
+  }
+  console.log(table(rows));
+  if (scan.repeated.length) {
+    console.log(`\n${c.bold('Repeated skills')}`);
+    for (const r of scan.repeated) {
+      const kind = r.identical ? c.green('identical') : c.red('diverged');
+      console.log(`  ${r.name}  ${kind}${r.inGlobal ? c.dim(' (also global)') : ''}  in ${r.projects.length}: ${r.projects.map((p) => path.basename(p)).join(', ')}`);
+    }
+  }
+}
+
 // ---- commands ------------------------------------------------------------
 
 async function main(argv, opts = {}) {
@@ -250,6 +299,15 @@ async function main(argv, opts = {}) {
       const done = names.map((n) => runAction(opts, { action: 'update', scope: 'global', name: n, force, dryRun }));
       if (done.length === 1) return report(done[0], flags);
       return report({ ok: true, message: `${dryRun ? 'dry run: ' : ''}updated ${done.length} skill(s)`, changes: done.flatMap((r) => r.changes) }, flags);
+    }
+
+    case 'projects':
+      return projectsCommand(opts, pos.slice(1), flags);
+
+    case 'config': {
+      const file = configPath(resolveContext(opts).home);
+      console.log(file);
+      return console.log(fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trimEnd() : c.dim('(no config file yet: defaults, no project roots)'));
     }
 
     default:

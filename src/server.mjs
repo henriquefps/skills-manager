@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkUpdates, getSkill, getState, resolveContext, runAction, SkmError } from './core/index.mjs';
+import { checkUpdates, getSkill, getState, projectContext, readConfig, resolveContext, runAction, scanProjects, SkmError, writeConfig } from './core/index.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const MIME = {
@@ -17,7 +17,7 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
 };
-const STATUS = { 'not-found': 404, exists: 409, diverged: 409, modified: 409, 'removed-upstream': 409, invalid: 400, network: 502 };
+const STATUS = { 'not-found': 404, exists: 409, diverged: 409, modified: 409, 'removed-upstream': 409, invalid: 400, network: 502, forbidden: 403 };
 
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
@@ -77,6 +77,23 @@ export function createServer(opts = {}) {
 
       if (url.pathname === '/api/state' && req.method === 'GET') return sendJson(res, 200, getState(ctx));
       if (url.pathname === '/api/updates' && req.method === 'GET') return sendJson(res, 200, await checkUpdates(ctx));
+      // projects + config
+      if (url.pathname === '/api/config' && req.method === 'GET') return sendJson(res, 200, readConfig(ctx));
+      if (url.pathname === '/api/config' && req.method === 'PUT') {
+        if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) {
+          return sendJson(res, 403, { ok: false, error: 'cross-origin request refused', code: 'forbidden' });
+        }
+        let input;
+        try {
+          input = JSON.parse((await readBody(req)) || '{}');
+        } catch (err) {
+          if (err instanceof SkmError) throw err;
+          throw new SkmError('invalid', 'request body is not valid JSON');
+        }
+        return sendJson(res, 200, writeConfig(ctx, input));
+      }
+      if (url.pathname === '/api/projects' && req.method === 'GET') return sendJson(res, 200, scanProjects(ctx));
+
       if (url.pathname === '/api/skill' && req.method === 'GET') {
         const scope = url.searchParams.get('scope') ?? 'global';
         if (!['global', 'local'].includes(scope)) throw new SkmError('invalid', `invalid scope: ${scope}`);
@@ -94,7 +111,7 @@ export function createServer(opts = {}) {
           if (err instanceof SkmError) throw err;
           throw new SkmError('invalid', 'request body is not valid JSON');
         }
-        return sendJson(res, 200, runAction(ctx, body));
+        return sendJson(res, 200, runAction(body?.projectRoot === undefined ? ctx : projectContext(ctx, body.projectRoot), body));
       }
       if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { ok: false, error: 'unknown endpoint', code: 'not-found' });
       if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(res, url.pathname);
