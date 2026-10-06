@@ -129,7 +129,7 @@
   const key = (s) => `${s.scope}:${s.name}`;
 
   function shortPath(p) {
-    const parts = p.replace(/^\/(Users|home)\/[^/]+/, '~').split('/');
+    const parts = p.replace(/^(?:\/(?:Users|home)\/[^/\\]+|[A-Za-z]:[\\/]+Users[\\/]+[^/\\]+)/, '~').split(/[\\/]+/);
     if (parts.length <= 4) return parts.join('/');
     return '.../' + parts.slice(-3).join('/');
   }
@@ -159,7 +159,7 @@
   }
 
   const fmtTok = (n) => Number(n || 0).toLocaleString('en-US');
-  const baseName = (p) => p.replace(/\/+$/, '').split('/').pop();
+  const baseName = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 
   async function api(path, body, method) {
     const opts = body

@@ -181,3 +181,29 @@ test('cli: ignore / ignored / unignore with name resolution, ambiguity, footer, 
   assert.equal('ignore' in raw(home), false);
   assert.doesNotMatch(skm(home, ['projects']).stdout, /ignored \(/);
 });
+
+test('ignoreKind treats backslashes and drive-letter paths as paths', async () => {
+  const { ignoreKind } = await import('../src/core/index.mjs');
+  for (const p of ['/a/b', 'a\\b', 'C:\\x', 'C:/x', 'c:\\Users\\me\\proj', '~\\proj', '~/proj']) assert.equal(ignoreKind(p), 'path', p);
+  for (const g of ['node_modules', '*-old', 'my app', 'foo.bar']) assert.equal(ignoreKind(g), 'glob', g);
+});
+
+test('isPathLike / isHomeRelative accept Windows-style input', async () => {
+  const { isPathLike, isHomeRelative } = await import('../src/core/pathkind.mjs');
+  assert.ok(isPathLike('C:\\x') && isPathLike('D:/x') && isPathLike('a\\b') && isPathLike('a/b'));
+  assert.ok(!isPathLike('name') && !isPathLike('*.tmp'));
+  assert.ok(isHomeRelative('~') && isHomeRelative('~/x') && isHomeRelative('~\\x') && !isHomeRelative('~x'));
+});
+
+test('skill names containing either separator are rejected', async () => {
+  const { assertName } = await import('../src/core/context.mjs');
+  for (const n of ['a/b', 'a\\b', 'C:\\x']) assert.throws(() => assertName(n), SkmError);
+  assert.equal(assertName('ok-name'), 'ok-name');
+});
+
+test('skm projects ignore treats a drive-letter argument as a path, not a name', () => {
+  const home = tmp();
+  const r = skm(home, ['projects', 'ignore', 'C:\\Users\\me\\proj', '--json']);
+  assert.match(r.stdout + r.stderr, /not inside a configured project root|C:\\Users\\me\\proj/);
+  assert.doesNotMatch(r.stdout + r.stderr, /matches \d+ projects/);
+});

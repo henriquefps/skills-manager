@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { collapseHome, expandHome, readConfig, readRaw, updateRaw } from './config.mjs';
 import { resolveContext, SkmError } from './context.mjs';
+import { isHomeRelative, isPathLike } from './pathkind.mjs';
 
 export const MAX_IGNORE = 200;
 const MAX_ENTRY = 500;
@@ -9,8 +10,8 @@ const GLOB_CHARS = /^[A-Za-z0-9_.\-@+ *]+$/;
 
 const inside = (dir, root) => dir === root || dir.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
 
-/** An entry with a slash is a path, anything else a directory-name glob. */
-export const ignoreKind = (entry) => (entry.includes('/') ? 'path' : 'glob');
+/** An entry with a slash or backslash (or a drive-letter prefix) is a path, anything else a directory-name glob. */
+export const ignoreKind = (entry) => (isPathLike(entry) ? 'path' : 'glob');
 
 /** Stored entries (`config.json` -> `ignore`), as written; non-strings and blanks dropped, duplicates removed. */
 export function readIgnore(opts = {}) {
@@ -32,7 +33,7 @@ export function normalizeIgnoreEntry(entry, home) {
     if (!e.replace(/[*.]/g, '')) throw new SkmError('invalid', `a name pattern needs something besides * and dots: ${e}`);
     return e;
   }
-  if (!(path.isAbsolute(e) || e.startsWith('~/'))) throw new SkmError('invalid', `a path must be absolute or start with ~/: ${e}`);
+  if (!(path.isAbsolute(e) || isHomeRelative(e))) throw new SkmError('invalid', `a path must be absolute or start with ~/: ${e}`);
   const abs = path.resolve(expandHome(e, home));
   if (abs === path.parse(abs).root) throw new SkmError('invalid', 'refusing to ignore the filesystem root');
   if (abs === path.resolve(home)) throw new SkmError('invalid', 'refusing to ignore the whole home folder');
