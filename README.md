@@ -10,7 +10,7 @@ skills (in the project you are in) at the same time.
 
 - No dependencies, no build step. Node.js 20 or newer is all you need.
 - Runs on `127.0.0.1` only; nothing leaves your machine.
-- Never really deletes: delete moves the skill to the system Trash (macOS `~/.Trash`, Linux XDG trash).
+- Never really deletes: delete moves the skill to the system Trash (macOS `~/.Trash`, Linux XDG trash; Windows: skm's own `%LOCALAPPDATA%\skm\Trash`, not the Recycle Bin).
 
 ## Install
 
@@ -46,7 +46,7 @@ Check it with `skm --help`.
 | Global central store | `~/.agents/skills/<name>/` (real folder) |
 | Claude view (global) | `~/.claude/skills/<name>` (symlink to the central folder) |
 | Inactive global skills | `~/.agents/skills-inactive/<name>/` |
-| Deleted skills | The system Trash: `~/.Trash` (macOS) or `~/.local/share/Trash` (Linux), outside the repo |
+| Deleted skills | The system Trash: `~/.Trash` (macOS) `~/.local/share/Trash` (Linux) or `%LOCALAPPDATA%\skm\Trash` (Windows, not the Recycle Bin), outside the repo |
 | Local skills | `<project>/.claude/skills` and/or `<project>/.agents/skills` |
 | Inactive local skills | `skills-inactive` next to where the skill was |
 

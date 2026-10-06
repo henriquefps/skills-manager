@@ -21,6 +21,16 @@ const describe = (op) => {
   }
 };
 
+/** Create a directory symlink. On Windows, fall back to a junction (absolute target) when symlinks need privileges. */
+export function symlinkDir(target, linkPath, { platform = process.platform, fsImpl = fs } = {}) {
+  try {
+    return fsImpl.symlinkSync(target, linkPath, 'dir');
+  } catch (e) {
+    if (platform !== 'win32' || (e.code !== 'EPERM' && e.code !== 'EACCES')) throw e;
+    return fsImpl.symlinkSync(path.resolve(path.dirname(linkPath), target), linkPath, 'junction');
+  }
+}
+
 function apply(op) {
   switch (op.op) {
     case 'move': return moveSync(op.from, op.to);
@@ -30,7 +40,7 @@ function apply(op) {
       return fs.cpSync(op.from, op.to, { recursive: true, dereference: true });
     case 'symlink':
       fs.mkdirSync(path.dirname(op.path), { recursive: true });
-      return fs.symlinkSync(op.target, op.path, 'dir');
+      return symlinkDir(op.target, op.path);
     case 'unlink': return fs.unlinkSync(op.path);
     case 'rm': return fs.rmSync(op.path, { recursive: true, force: true });
     case 'gitignore': return applyIgnoreOp(op);

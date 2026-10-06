@@ -19,9 +19,11 @@ function uniqueName(name, stamp, isTaken) {
 /**
  * Where `src` will land in the system Trash. Pure: touches nothing.
  * `taken` collects destinations already planned, so several folders with the same name get distinct slots.
+ * On win32 the folder goes to skm's own fallback dir (`%LOCALAPPDATA%\skm\Trash`, else `<home>\AppData\Local\skm\Trash`),
+ * NOT the real Recycle Bin, which plain file moves cannot write to.
  * Returns { dest, info? }; `info` is the .trashinfo file to write on Linux.
  */
-export function trashTarget(src, { home, platform = process.platform, now = new Date(), taken = new Set() }) {
+export function trashTarget(src, { home, platform = process.platform, now = new Date(), taken = new Set(), env = process.env }) {
   const name = path.basename(src);
   if (platform === 'darwin') {
     const dir = path.join(home, '.Trash');
@@ -42,6 +44,13 @@ export function trashTarget(src, { home, platform = process.platform, now = new 
     const original = path.resolve(src).split('/').map(encodeURIComponent).join('/');
     const body = `[Trash Info]\nPath=${original}\nDeletionDate=${date(now)}T${time(now, ':')}\n`;
     return { dest, info: { path: path.join(root, 'info', `${unique}.trashinfo`), body } };
+  }
+  if (platform === 'win32') {
+    const dir = path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'skm', 'Trash');
+    const free = (n) => taken.has(path.join(dir, n)) || fs.existsSync(path.join(dir, n));
+    const dest = path.join(dir, uniqueName(name, `${date(now)} ${time(now, '.')}`, free));
+    taken.add(dest);
+    return { dest };
   }
   throw new SkmError('unsupported', `moving to the system Trash is not supported on ${platform}; delete ${src} by hand`);
 }
