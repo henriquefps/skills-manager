@@ -8,7 +8,7 @@ import { GIT_CONCURRENCY, mapLimit, projectAuto } from './projectinfo.mjs';
 import { projectMetaFor, readProjectMeta, writeProjectMeta } from './projectmeta.mjs';
 import { scanScope } from './scan.mjs';
 
-const SKIP_DIRS = new Set(['node_modules', '.git', '.Trash']);
+const SKIP_DIRS = new Set(['node_modules', '.git', '.Trash', '$RECYCLE.BIN', 'System Volume Information']);
 
 /** Files that mark a folder as one project even without git or skills. */
 const MARKER_FILES = new Set(['package.json', 'pyproject.toml', 'requirements.txt', 'Cargo.toml', 'go.mod', 'config.xml', 'plugin.xml', 'Package.swift', 'build.gradle', 'build.gradle.kts', 'pubspec.yaml']);

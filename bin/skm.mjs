@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
+import { isHomeRelative, isPathLike } from '../src/core/pathkind.mjs';
 import { assertSkillsExist, checkUpdates, configPath, describeProject, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, projectDescription, projectStatus, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
@@ -239,7 +240,7 @@ async function resolveProject(ctx, scan, arg) {
   const byName = scan.projects.filter((p) => p.name === arg);
   if (byName.length === 1) return byName[0];
   if (byName.length > 1) throw new SkmError('ambiguous', `"${arg}" matches ${byName.length} projects, pass one of these paths:\n${byName.map((p) => `  ${p.root}`).join('\n')}`);
-  const abs = path.resolve(ctx.cwd, arg === '~' || arg.startsWith('~/') ? path.join(ctx.home, arg.slice(1)) : arg);
+  const abs = path.resolve(ctx.cwd, isHomeRelative(arg) ? path.join(ctx.home, arg.slice(1)) : arg);
   const known = scan.projects.find((p) => p.root === abs);
   if (known) return known;
   throwIfIgnored(ctx, abs);
@@ -302,7 +303,7 @@ function ignoreCommand(ctx, scan, args, flags) {
   if (!args.length) throw new SkmError('invalid', 'usage: skm projects ignore <name|path|glob...>');
   const add = [];
   for (const arg of args) {
-    if (arg.includes('/') || arg.startsWith('~')) add.push(arg.startsWith('~') ? arg : path.resolve(ctx.cwd, arg));
+    if (isPathLike(arg) || arg.startsWith('~')) add.push(arg.startsWith('~') || /^[A-Za-z]:[\\/]/.test(arg) ? arg : path.resolve(ctx.cwd, arg));
     else if (arg.includes('*') || flags.glob === true) add.push(arg);
     else {
       const byName = scan.projects.filter((p) => p.name === arg);
@@ -396,7 +397,7 @@ async function projectsCommand(opts, [sub, arg, ...more], flags) {
     projects = searchProjects(projects, query);
     if (flags.json) return console.log(JSON.stringify(flags.brief ? projects.map(brief) : projects, null, 2));
     if (!projects.length) {
-      if (more.length === 0) throwIfIgnored(ctx, path.resolve(ctx.cwd, arg === '~' || arg.startsWith('~/') ? path.join(ctx.home, arg.slice(1)) : arg));
+      if (more.length === 0) throwIfIgnored(ctx, path.resolve(ctx.cwd, isHomeRelative(arg) ? path.join(ctx.home, arg.slice(1)) : arg));
       const footer = ignoredFooter(scan);
       return console.log(`no projects match "${query}"${footer ? `\n${footer}` : ''}`);
     }
