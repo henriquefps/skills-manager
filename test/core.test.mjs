@@ -227,8 +227,8 @@ test('delete: unsupported platform throws and touches nothing', () => {
   const home = buildHome();
   for (const dryRun of [true, false]) {
     assert.throws(
-      () => runAction({ home, cwd: home, platform: 'win32' }, { action: 'delete', scope: 'global', name: 'good', dryRun }),
-      (e) => e.code === 'unsupported' && /win32/.test(e.message) && /by hand/.test(e.message),
+      () => runAction({ home, cwd: home, platform: 'freebsd' }, { action: 'delete', scope: 'global', name: 'good', dryRun }),
+      (e) => e.code === 'unsupported' && /freebsd/.test(e.message) && /by hand/.test(e.message),
     );
   }
   assert.ok(fs.existsSync(path.join(home, '.agents', 'skills', 'good', 'SKILL.md')));

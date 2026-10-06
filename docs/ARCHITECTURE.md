@@ -24,7 +24,9 @@ Inactive (global): `~/.agents/skills-inactive/<name>/`; the `~/.claude/skills` s
 Trash: the real system Trash, never a folder inside the repo or `~/.agents`. macOS: `~/.Trash/<name>`
 (on a name clash, ` <YYYY-MM-DD HH.MM.SS>` is appended, as Finder does). Linux (XDG):
 `~/.local/share/Trash/files/<name>` plus `info/<name>.trashinfo` (`Path`, `DeletionDate`), unique name on a clash.
-Other platforms: `SkmError("unsupported")`. The folder is moved (`moveSync`, so cross-device works),
+Windows: no real Recycle Bin (plain moves cannot write to it); the folder goes to skm's own
+`%LOCALAPPDATA%\skm\Trash\<name>` (else `<home>\AppData\Local\skm\Trash`), same unique-name rule as macOS.
+Symlinks use `dir` symlinks, falling back to junctions on EPERM/EACCES. Other platforms: `SkmError("unsupported")`. The folder is moved (`moveSync`, so cross-device works),
 so macOS "Put Back" is not guaranteed; restore by hand. Symlinks are only unlinked. See `src/core/trash.mjs`;
 `home`, `platform` and `now` are injectable.
 
