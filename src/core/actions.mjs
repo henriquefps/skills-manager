@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assertName, resolveContext, SkmError } from './context.mjs';
-import { dirHash, inspect, moveSync } from './fsutil.mjs';
+import { dirHash, moveSync } from './fsutil.mjs';
 import { applyIgnoreOp, inactiveIgnoreOp } from './gitignore.mjs';
-import { locate, scanScope } from './scan.mjs';
+import { globalSource, locate, localFolders, scanScope } from './scan.mjs';
 import { trashSync, trashTarget } from './trash.mjs';
 import { updateSkill } from './updates.mjs';
 
@@ -186,10 +186,8 @@ function copyToLocal(ctx, { name, overwrite, target = 'claude', dryRun }) {
   if (!ctx.project) throw new SkmError('no-project', 'no project detected from the current directory');
   if (!['agents', 'claude'].includes(target)) throw new SkmError('invalid', `invalid target: ${target}`);
   const l = ctx.dirs('local');
-  const g = locate(ctx, 'global', name);
-  // Active copies first, then inactive ones (a real folder in ~/.claude/skills-inactive counts too). The source is never touched.
-  const gci = inspect(path.join(ctx.dirs('global').claudeInactive, name));
-  const src = [g.a, g.c, g.ia, gci].find((x) => x && x.kind !== 'broken-symlink');
+  // Active copies first, then inactive ones. The source is never touched.
+  const src = globalSource(ctx, name);
   if (!src) throw new SkmError('not-found', `no global skill: ${name}`);
   const existing = locate(ctx, 'local', name)[target === 'agents' ? 'a' : 'c'];
   const plan = [];
@@ -201,24 +199,61 @@ function copyToLocal(ctx, { name, overwrite, target = 'claude', dryRun }) {
   return run(plan, dryRun, `copied global/${name} to local (${target})`);
 }
 
-/** Copy several global skills; continues past failures and reports each one. */
-function copyManyToLocal(ctx, { names, overwrite, target = 'claude', dryRun }) {
-  if (!Array.isArray(names) || !names.length) throw new SkmError('invalid', 'names must be a non-empty array');
+/**
+ * Replace a local skill with the global copy (active or inactive; the global side is only read). Every real local
+ * folder that differs goes to the system Trash and gets the global copy in its place, so an inactive local skill
+ * stays inactive and links are left alone. Identical folders are a no-op.
+ */
+function refresh(ctx, { name, dryRun }) {
   if (!ctx.project) throw new SkmError('no-project', 'no project detected from the current directory');
-  if (!['agents', 'claude'].includes(target)) throw new SkmError('invalid', `invalid target: ${target}`);
+  const src = globalSource(ctx, name);
+  if (!src) throw new SkmError('not-found', `no global skill: ${name}`);
+  const l = locate(ctx, 'local', name);
+  if (![l.a, l.c, l.ia, l.ic].some(Boolean)) throw new SkmError('not-found', `no local skill: ${name}`);
+  const dirs = localFolders(ctx, name);
+  if (!dirs.length) throw new SkmError('invalid', `local ${name} has no real folder to refresh (only links)`);
+  const hash = dirHash(src.real);
+  const stale = dirs.filter((d) => dirHash(d.path) !== hash);
+  if (!stale.length) return run([], dryRun, `local/${name} is already the same as global`);
+  const trash = trasher(ctx);
+  const plan = stale.flatMap((d) => [trash(d.path), { op: 'copy', from: src.real, to: d.path }]);
+  const dests = plan.filter((op) => op.op === 'trash').map((op) => op.target.dest);
+  return run(plan, dryRun, `refreshed local/${name} from global; the old copy is in the system Trash (${dests.join(', ')})`);
+}
+
+/** Run `one(name)` for several names; continues past failures and reports each one. */
+function forEachName(names, one) {
+  if (!Array.isArray(names) || !names.length) throw new SkmError('invalid', 'names must be a non-empty array');
   const results = [];
   const changes = [];
   for (const name of new Set(names)) {
     try {
-      changes.push(...copyToLocal(ctx, { name: assertName(name), overwrite, target, dryRun }).changes);
+      changes.push(...one(assertName(name)).changes);
       results.push({ name, ok: true });
     } catch (err) {
       if (!(err instanceof SkmError)) throw err;
       results.push({ name, ok: false, error: err.message, code: err.code });
     }
   }
-  const done = results.filter((r) => r.ok).length;
+  return { results, changes, done: results.filter((r) => r.ok).length };
+}
+
+/** Copy several global skills; continues past failures and reports each one. */
+function copyManyToLocal(ctx, { names, overwrite, target = 'claude', dryRun }) {
+  if (!Array.isArray(names) || !names.length) throw new SkmError('invalid', 'names must be a non-empty array');
+  if (!ctx.project) throw new SkmError('no-project', 'no project detected from the current directory');
+  if (!['agents', 'claude'].includes(target)) throw new SkmError('invalid', `invalid target: ${target}`);
+  const { results, changes, done } = forEachName(names, (name) => copyToLocal(ctx, { name, overwrite, target, dryRun }));
   const message = `${dryRun ? 'dry run: ' : ''}copied ${done} of ${results.length} global skill(s) to local (${target})`;
+  return { ok: done === results.length, message, changes, results };
+}
+
+/** Refresh several local skills from global; continues past failures and reports each one. */
+function refreshMany(ctx, { names, dryRun }) {
+  if (!Array.isArray(names) || !names.length) throw new SkmError('invalid', 'names must be a non-empty array');
+  if (!ctx.project) throw new SkmError('no-project', 'no project detected from the current directory');
+  const { results, changes, done } = forEachName(names, (name) => refresh(ctx, { name, dryRun }));
+  const message = `${dryRun ? 'dry run: ' : ''}refreshed ${done} of ${results.length} local skill(s) from global`;
   return { ok: done === results.length, message, changes, results };
 }
 
@@ -239,7 +274,7 @@ function del(ctx, { scope, name, dryRun }) {
 
 // ---- entry points --------------------------------------------------------
 
-export const ACTIONS = ['activate', 'deactivate', 'normalize', 'promote', 'copyToLocal', 'delete', 'update'];
+export const ACTIONS = ['activate', 'deactivate', 'normalize', 'promote', 'copyToLocal', 'refresh', 'delete', 'update'];
 
 /** Run one action. Throws SkmError on failure; returns { ok, message, changes }. */
 export function runAction(opts, req) {
@@ -248,6 +283,10 @@ export function runAction(opts, req) {
   if (action === 'copyToLocal' && req?.names !== undefined) {
     requireScope(scope ?? 'global', ['global']);
     return copyManyToLocal(ctx, { names: req.names, overwrite, target, dryRun });
+  }
+  if (action === 'refresh' && req?.names !== undefined) {
+    requireScope(scope ?? 'local', ['local']);
+    return refreshMany(ctx, { names: req.names, dryRun });
   }
   const name = assertName(req?.name);
   switch (action) {
@@ -267,6 +306,9 @@ export function runAction(opts, req) {
     case 'copyToLocal':
       requireScope(scope ?? 'global', ['global']);
       return copyToLocal(ctx, { name, overwrite, target, dryRun });
+    case 'refresh':
+      requireScope(scope ?? 'local', ['local']);
+      return refresh(ctx, { name, dryRun });
     case 'update':
       requireScope(scope ?? 'global', ['global']);
       return updateSkill(ctx, { name, force: Boolean(force), dryRun });

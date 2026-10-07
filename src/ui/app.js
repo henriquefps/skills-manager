@@ -706,7 +706,8 @@
             !s.active ? h('span', { class: 'badge plain', text: 'Inactive' }) : null,
             costBadge(s),
             lintBadges(s),
-            has(other) ? h('span', { class: 'badge also', text: `Also ${other}` }) : null,
+            s.vsGlobal === 'diverged' ? h('span', { class: 'badge warn', title: 'The local copy differs from the global skill of the same name.', text: 'Differs from global' })
+              : has(other) ? h('span', { class: 'badge also', text: `Also ${other}` }) : null,
             resultOf(s) ? updateBadge(resultOf(s)) : null,
             isModified(s) ? h('span', { class: 'badge warn', title: 'The files differ from the version that was installed.', text: 'Modified locally' }) : null)),
         h('div', { class: 'card-ctl' },
@@ -730,6 +731,7 @@
       h('div', { class: 'card-foot' },
         h('span', { class: 'meta', text: `${s.files} ${s.files === 1 ? 'file' : 'files'} / ${fmtBytes(s.bytes)} / ${fmtDate(s.mtime)}` }),
         h('div', { class: 'actions' },
+          s.scope === 'local' && s.vsGlobal === 'diverged' ? h('button', { class: 'btn small', type: 'button', text: 'Update local from global', 'data-fk': `rf:${k}`, onclick: () => refreshFromGlobal([s.name]) }) : null,
           s.scope === 'local' ? h('button', { class: 'btn small', type: 'button', text: 'Promote to global', onclick: () => promote(s) }) : null,
           s.scope === 'global' && state.data.project ? h('button', { class: 'btn small', type: 'button', text: 'Copy to local', onclick: () => copyToLocal(s) }) : null,
           hasUpdate(s) ? h('button', { class: 'btn small primary', type: 'button', text: 'Update', 'data-fk': `up:${k}`, 'aria-label': `Update ${s.name}`, onclick: () => updateSkill(s) }) : null,
@@ -939,6 +941,47 @@
     }
   }
 
+  /**
+   * Replace local copies with the global ones (`names`, several at once in a project card). One name shows the
+   * global -> local diff, like update does. `project` = { root, name } for a project from the index.
+   */
+  async function refreshFromGlobal(names, project) {
+    const projectRoot = project ? project.root : null;
+    const base = { action: 'refresh', scope: 'local', ...(names.length === 1 ? { name: names[0] } : { names }), ...(projectRoot ? { projectRoot } : {}) };
+    const inactive = names.filter((n) => { const g = skillsOf('global').find((x) => x.name === n); return g && !g.active; });
+    const one = names.length === 1;
+    const where = project ? ` in ${project.name}` : '';
+    const values = await confirmDialog({
+      title: one ? `Update local ${names[0]} from global` : `Update ${names.length} local skills from global${where}`,
+      lead: `Replaces the local ${one ? 'copy' : 'copies'}${where} with the global ${one ? 'skill' : 'skills'}. The old local ${one ? 'folder goes' : 'folders go'} to the system Trash, so local edits are only kept there.`
+        + (inactive.length ? ` ${one ? 'The global skill' : `Global ${inactive.join(', ')}`} ${inactive.length === 1 ? 'is' : 'are'} inactive and ${inactive.length === 1 ? 'stays' : 'stay'} that way.` : ''),
+      confirmLabel: one ? 'Update local' : `Update ${names.length} skills`,
+      danger: true,
+      preview: async () => {
+        if (one) return previewOf(await safeDry(base));
+        try { return batchPreview(await batchCall({ ...base, dryRun: true }), 'will be updated'); } catch (e) { return { error: e.message }; }
+      },
+      extra: one ? async () => {
+        const q = new URLSearchParams({ scope: 'local', name: names[0], ...(projectRoot ? { projectRoot } : {}) });
+        return diffView(await api(`/api/diff?${q}`), false, 'This compares the local copy with the global one, so your local edits appear as removed lines and will be replaced.');
+      } : null,
+    });
+    if (!values) return;
+    const keys = names.map((n) => (projectRoot ? pkey(projectRoot, n) : `local:${n}`));
+    for (const k of keys) state.busy.add(k);
+    render();
+    try {
+      const res = await batchCall({ ...base });
+      const failed = (res.results || []).filter((r) => !r.ok);
+      toast(failed.length ? `${res.message}. Failed: ${failed.map((r) => `${r.name} (${r.error})`).join('; ')}` : res.message, failed.length ? 'error' : 'info');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      for (const k of keys) state.busy.delete(k);
+      await refresh();
+    }
+  }
+
   async function remove(s) {
     const base = { action: 'delete', scope: s.scope, name: s.name };
     // The destination comes from the dry-run plan, so the lead names the exact place.
@@ -1002,7 +1045,7 @@
 
   const FILE_STATUS = { added: { label: 'Added', tone: 'accent' }, removed: { label: 'Removed', tone: 'bad' }, modified: { label: 'Modified', tone: 'plain' } };
 
-  function diffView(d, modified) {
+  function diffView(d, modified, note) {
     const st = d.stats || {};
     const files = d.files || [];
     const parts = [['modified', st.modified], ['added', st.added], ['removed', st.removed]].filter(([, n]) => n);
@@ -1012,9 +1055,9 @@
         parts.length ? ` (${parts.map(([k, n]) => `${n} ${k}`).join(', ')})` : '',
         d.from && d.to ? h('span', { class: 'diff-rev', text: `${d.from} to ${d.to}` }) : null,
         h('span', { class: 'diff-counts' }, h('i', { class: 'add', text: `+${st.insertions || 0}` }), ' ', h('i', { class: 'del', text: `-${st.deletions || 0}` }))),
-      h('p', { class: `diff-note${modified ? ' strong' : ''}`, text: modified
+      h('p', { class: `diff-note${modified || note ? ' strong' : ''}`, text: note || (modified
         ? 'This compares your installed copy with the latest upstream, so your local edits appear as removed lines and will be replaced.'
-        : 'This compares your installed copy with the latest upstream. Anything you changed locally would appear as removed lines.' }));
+        : 'This compares your installed copy with the latest upstream. Anything you changed locally would appear as removed lines.') }));
     if (!files.length) return wrap;
     wrap.append(h('div', { class: 'diff-files' }, files.map((f, i) => diffFile(f, i === 0))));
     return wrap;
@@ -1359,6 +1402,7 @@
     const m = pmetaOf(p);
     const st = pstatusOf(p);
     const stack = pautoOf(p).stack || [];
+    const diverged = p.skills.filter((k) => k.vsGlobal === 'diverged').map((k) => k.name);
     const chips = [
       st !== 'active' ? h('span', { class: `badge ${PROJECT_STATUS[st].tone || 'plain'}`, text: PROJECT_STATUS[st].label }) : null,
       ...m.tags.map((t) => h('button', {
@@ -1383,6 +1427,7 @@
         h('div', { class: 'actions' },
           h('button', { class: 'btn small', type: 'button', 'data-fk': `pe:${p.root}`, 'aria-label': `Edit ${p.name}`, text: 'Edit', onclick: () => openProjectEditor(p) }),
           h('button', { class: 'btn small', type: 'button', text: 'Copy from global', onclick: () => copyFromGlobal(p) }),
+          diverged.length > 1 ? h('button', { class: 'btn small', type: 'button', 'data-fk': `prfa:${p.root}`, text: `Update ${diverged.length} from global`, title: `Diverged from global: ${diverged.join(', ')}`, onclick: () => refreshFromGlobal(diverged, p) }) : null,
           h('button', { class: 'btn small', type: 'button', 'data-fk': `pi:${p.root}`, 'aria-label': `Ignore ${p.name}`, title: 'Hide this project from the index', text: 'Ignore', onclick: () => ignoreProject(p) }))));
   }
 
@@ -1513,9 +1558,11 @@
           k.status !== 'ok' ? badge(k.status) : null,
           !k.active ? h('span', { class: 'badge plain', text: 'Inactive' }) : null,
           costBadge(k),
-          inGlobal ? h('span', { class: 'badge also', text: 'Also global' }) : null),
+          k.vsGlobal === 'diverged' ? h('span', { class: 'badge warn', title: 'Differs from the global skill of the same name.', text: 'Diverged from global' })
+            : inGlobal ? h('span', { class: 'badge also', text: 'Also global' }) : null),
         k.cost ? h('div', { class: `costbar${k.active ? '' : ' off'}`, 'aria-hidden': 'true', title: costTitle(k) }, h('i', { style: `width:${Math.max(2, Math.round((k.cost.listing / maxCost) * 100))}%` })) : null),
       h('div', { class: 'prow-actions' },
+        k.vsGlobal === 'diverged' ? h('button', { class: 'btn small', type: 'button', text: 'Update from global', 'data-fk': `prf:${pkey(p.root, k.name)}`, 'aria-label': `Update ${k.name} in ${p.name} from global`, onclick: () => refreshFromGlobal([k.name], p) }) : null,
         h('button', { class: 'btn small', type: 'button', text: 'Promote to global', 'aria-label': `Promote ${k.name} from ${p.name} to global`, onclick: () => promote({ name: k.name, alsoIn: inGlobal ? ['global'] : [] }, p.root) }),
         h('button', {
           class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(k.active), 'data-fk': `psw:${pkey(p.root, k.name)}`,
@@ -1621,10 +1668,10 @@
     }
   }
 
-  function batchPreview(res) {
+  function batchPreview(res, verb = 'will be copied') {
     const results = res.results || [];
     const lines = [];
-    for (const r of results) lines.push(r.ok ? { text: `${r.name}: will be copied` } : { text: `${r.name}: ${r.error || 'will fail'}`, error: true });
+    for (const r of results) lines.push(r.ok ? { text: `${r.name}: ${verb}` } : { text: `${r.name}: ${r.error || 'will fail'}`, error: true });
     const changes = res.changes || [];
     if (changes.length) {
       lines.push({ text: 'Changes', group: true });

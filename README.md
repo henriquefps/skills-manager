@@ -96,11 +96,13 @@ skm activate <name>       [--local|--global]
 skm deactivate <name>     [--local|--global]
 skm promote <name>        local -> global (copy)   [--overwrite]
 skm pull <name>           global -> local (copy)   [--overwrite] [--target agents|claude]
+skm refresh <name...>     replace local copies with the global one   [--dry-run] [--yes]
 skm delete <name>         [--local|--global]   # moves to the system Trash; restore it from there by hand
 skm outdated [--json]     check the GitHub source of each tracked global skill
 skm update <name>         [--force] [--dry-run] [--yes]
 skm update --all          [--force] [--dry-run] [--yes]   # only the ones with an update available
 skm diff <name>           [--json]   # installed vs upstream, before updating
+skm diff <name> --local   [--json]   # local vs global, before refreshing
 skm cost                  [--json] [--all]   # estimated context tokens of active skills
 skm lint [name]           [--json] [--all]   # check SKILL.md content; exit 1 on errors
 skm fav <name...>         |   skm unfav <name...>   # favorites
@@ -168,6 +170,20 @@ Favorites and tags are saved by skill name in `~/.config/skm/config.json`, next 
 folders, so they belong to your machine and never touch the skill folders.
 
 ![skm: favorites, tags and batch copy](docs/img/screenshot-favorites.png)
+
+### Refreshing a local skill from the global copy
+
+When a project has an older copy of a global skill, skm marks it **Differs from global** (in the project's skill
+list) or **Diverged from global** (in the Projects tab). **Update local from global** replaces the local folder with
+the global one: you see the diff first (local edits show up as removed lines), the old local folder goes to the system
+Trash, and an inactive global skill is only read and stays inactive. A project card with several diverged skills
+offers to update them all at once.
+
+```sh
+skm diff wrangler --local          # what would change
+skm refresh wrangler --dry-run     # the plan
+skm refresh wrangler sql-style     # several at once; asks before replacing
+```
 
 ## Context cost
 

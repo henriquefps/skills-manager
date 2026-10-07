@@ -6,7 +6,7 @@ import { dirHash } from './fsutil.mjs';
 import { compileIgnore, currentProjectExempt, readIgnore } from './ignore.mjs';
 import { GIT_CONCURRENCY, mapLimit, projectAuto } from './projectinfo.mjs';
 import { projectMetaFor, readProjectMeta, writeProjectMeta } from './projectmeta.mjs';
-import { scanScope } from './scan.mjs';
+import { compareWithGlobal, scanScope } from './scan.mjs';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.Trash', '$RECYCLE.BIN', 'System Volume Information']);
 
@@ -82,7 +82,8 @@ function skillDir(skill) {
   return loc?.path ?? null;
 }
 
-const skillEntry = (s) => ({ name: s.name, active: s.active, status: s.status, cost: skillCost(s), meta: s.meta });
+/** Project skill entry; `vsGlobal` is `"identical" | "diverged" | null` (see compareWithGlobal). */
+const skillEntry = (ctx, cache) => (s) => ({ name: s.name, active: s.active, status: s.status, cost: skillCost(s), meta: s.meta, vsGlobal: compareWithGlobal(ctx, s.name, cache) });
 
 /**
  * Scan the configured roots. `config` overrides the stored one ({ projectRoots, scanDepth }). Ignored folders are pruned and
@@ -105,6 +106,7 @@ export async function scanProjects(opts = {}, config) {
   let projects = [];
   const metas = readProjectMeta(ctx);
   const dirs = new Map(); // project root -> name -> folder
+  const globalHashes = new Map();
   for (const r of projectRoots) {
     for (const p of findProjects(ctx, r, scanDepth, ignore)) {
       if (seen.has(p.root)) continue;
@@ -115,7 +117,7 @@ export async function scanProjects(opts = {}, config) {
         root: p.root,
         name: p.name,
         meta: projectMetaFor(metas, p.root),
-        skills: p.skills.map(skillEntry),
+        skills: p.skills.map(skillEntry(p.ctx, globalHashes)),
       });
     }
   }
@@ -182,7 +184,7 @@ export async function describeProject(opts, root) {
     name: path.basename(root),
     meta: projectMetaFor(readProjectMeta(ctx), root),
     auto: await projectAuto(ctx, root),
-    skills: scanScope(pctx, 'local').map(skillEntry),
+    skills: scanScope(pctx, 'local').map(skillEntry(pctx)),
   };
 }
 

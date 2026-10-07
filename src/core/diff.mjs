@@ -3,7 +3,7 @@ import path from 'node:path';
 import { assertName, resolveContext, SkmError } from './context.mjs';
 import { walk } from './fsutil.mjs';
 import { lockEntry, readLock } from './lock.mjs';
-import { locate } from './scan.mjs';
+import { globalSource, locate, localFolders } from './scan.mjs';
 import { gitTreeHash } from './treehash.mjs';
 import { withUpstream } from './updates.mjs';
 
@@ -193,4 +193,23 @@ export async function diffUpstream(opts, name) {
     to: newHash.slice(0, 7),
     ...diffTrees(dir, src),
   }));
+}
+
+// ---- local -> global -----------------------------------------------------
+
+/**
+ * Diff a local skill against the global copy (old = local, new = global: what a refresh would do, so local edits
+ * show as removals). The global skill may be inactive. With two local folders, the first one that differs is shown.
+ */
+export function diffLocal(opts, name) {
+  const ctx = resolveContext(opts);
+  assertName(name);
+  if (!ctx.project) throw new SkmError('no-project', 'no project detected from the current directory');
+  const src = globalSource(ctx, name);
+  if (!src) throw new SkmError('not-found', `no global skill: ${name}`);
+  const dirs = localFolders(ctx, name);
+  if (!dirs.length) throw new SkmError('not-found', `no local skill folder: ${name}`);
+  const diffs = dirs.map((d) => ({ local: d.path, ...diffTrees(d.path, src.real) }));
+  const d = diffs.find((x) => x.files.length) ?? diffs[0];
+  return { name, from: 'local', to: 'global', local: d.local, global: src.real, stats: d.stats, files: d.files };
 }

@@ -31,6 +31,36 @@ export function locate(ctx, scope, name) {
   };
 }
 
+/** The global folder a copy to local reads: active copies first, then inactive ones (a real folder in ~/.claude/skills-inactive counts too). */
+export function globalSource(ctx, name) {
+  const g = locate(ctx, 'global', name);
+  const gci = inspect(path.join(ctx.dirs('global').claudeInactive, name));
+  return [g.a, g.c, g.ia, gci].find((x) => x && x.kind !== 'broken-symlink') ?? null;
+}
+
+/** Real folders of a local skill, active or inactive (links are left out: they follow their target). */
+export function localFolders(ctx, name) {
+  const l = locate(ctx, 'local', name);
+  return [l.a, l.c, l.ia, l.ic].filter((x) => x?.kind === 'dir');
+}
+
+/**
+ * `"identical"` or `"diverged"`: the local skill's real folders against the global copy (active or inactive).
+ * Null when either side is missing. `cache` (Map name -> hash) avoids hashing a global folder twice.
+ */
+export function compareWithGlobal(ctx, name, cache) {
+  try {
+    const src = globalSource(ctx, name);
+    const dirs = localFolders(ctx, name);
+    if (!src || !dirs.length) return null;
+    const hash = cache?.get(name) ?? dirHash(src.real);
+    cache?.set(name, hash);
+    return dirs.every((d) => dirHash(d.path) === hash) ? 'identical' : 'diverged';
+  } catch {
+    return null;
+  }
+}
+
 /** The folder whose contents represent the skill, or null when everything is broken. */
 function primaryDir(...locs) {
   for (const l of locs) if (l && l.real) return l.real;
@@ -184,6 +214,7 @@ export function getState(opts = {}) {
   const l = new Set(local.map((s) => s.name));
   for (const s of global) if (l.has(s.name)) s.alsoIn.push('local');
   for (const s of local) if (g.has(s.name)) s.alsoIn.push('global');
+  for (const s of local) s.vsGlobal = s.alsoIn.length ? compareWithGlobal(ctx, s.name) : null;
   const all = [...global, ...local];
   const favorites = new Set(all.filter((s) => s.meta.favorite).map((s) => s.name)).size;
   return { cwd: ctx.cwd, project: ctx.project, global, local, totals: totalsOf(global, local), tags: tagCounts(all), favorites };

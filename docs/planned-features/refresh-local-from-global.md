@@ -1,6 +1,6 @@
 # Planned: refresh a local skill from the global copy
 
-Status: planned. Partly available through the CLI (`skm pull <name> --overwrite`), not yet a clear flow in the UI.
+Status: shipped (2026-10-07). `skm refresh <name...>`, `skm diff <name> --local`, and **Update local from global** in the UI.
 
 ## Why
 

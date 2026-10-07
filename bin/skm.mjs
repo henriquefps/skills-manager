@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { isHomeRelative, isPathLike } from '../src/core/pathkind.mjs';
-import { assertSkillsExist, checkUpdates, configPath, describeProject, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, projectDescription, projectStatus, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
+import { assertSkillsExist, checkUpdates, configPath, describeProject, diffLocal, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, projectDescription, projectStatus, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -15,6 +15,7 @@ const USAGE = `skm: skills manager
   skm activate|deactivate <name> [--local|--global]
   skm promote <name>      local -> global (copy)   [--overwrite]
   skm pull <name...>      global -> local (copy, inactive ones too)   [--overwrite] [--target agents|claude]
+  skm refresh <name...>   update local skills from the global copy (inactive ones too); old local copy to the Trash   [--dry-run]
   skm fav|unfav <name...>   mark / unmark favorites   |   skm tags   tags in use with counts
   skm tag|untag <name> <tag...>   add / remove tags
   skm delete <name> [--local|--global]   moves it to the system Trash
@@ -22,6 +23,7 @@ const USAGE = `skm: skills manager
   skm cost [--json] [--all]   context cost (estimated tokens) of active skills
   skm lint [name] [--json] [--all]   check SKILL.md content; exit 1 on errors
   skm diff <name> [--json]   installed vs upstream (local edits show as removals)
+  skm diff <name> --local [--json]   local vs global copy, what refresh would change
   skm update <name>|--all [--force]   update from the source; the old version goes to the system Trash
   skm projects [--json] [--brief] [--all]   scan the configured project roots (archived hidden unless --all)
   skm projects find <query...> [--json] [--brief] [--all]   projects matching every word, best first
@@ -116,7 +118,7 @@ function printList(state, filtered) {
       String(s.cost?.listing ?? 0),
       s.origin ? `${s.origin.source ?? '-'}${s.origin.modified ? c.yellow(' [modified]') : ''}` : '-',
       s.meta.tags.join(',') || '-',
-      s.alsoIn.join(', '),
+      s.alsoIn.join(', ') + (s.vsGlobal === 'diverged' ? c.yellow(' [differs]') : ''),
     ]);
   }
   console.log(table(rows));
@@ -180,9 +182,10 @@ async function perform(opts, req, flags, { destructive = false } = {}) {
   report(runAction(opts, { ...req, dryRun }), flags);
 }
 
-/** Colored unified diff of installed -> upstream. */
+/** Colored unified diff of installed -> upstream, or local -> global (`d.from === 'local'`). */
 function printDiff(d) {
-  console.log(`${c.bold(d.name)}  ${d.from} (installed) -> ${d.to} (upstream)`);
+  const local = d.from === 'local';
+  console.log(local ? `${c.bold(d.name)}  ${d.local} (local) -> ${d.global} (global)` : `${c.bold(d.name)}  ${d.from} (installed) -> ${d.to} (upstream)`);
   if (!d.files.length) return console.log('no differences');
   for (const f of d.files) {
     console.log(c.bold(`\n${f.status} ${f.path}${f.binary ? ' (binary)' : ''}`));
@@ -192,7 +195,7 @@ function printDiff(d) {
     }
   }
   console.log(`\n${statLine(d.stats)}`);
-  console.log(c.dim('installed -> upstream: your local edits show up as removals'));
+  console.log(c.dim(local ? 'local -> global: your local edits show up as removals' : 'installed -> upstream: your local edits show up as removals'));
 }
 
 // ---- projects ------------------------------------------------------------
@@ -515,6 +518,29 @@ async function main(argv, opts = {}) {
       return perform(opts, req, flags, { destructive: Boolean(flags.overwrite) });
     }
 
+    case 'refresh': {
+      const names = pos.slice(1);
+      if (!names.length) throw new SkmError('invalid', 'usage: skm refresh <name...>');
+      const req = { action: 'refresh', scope: 'local', ...(names.length > 1 ? { names } : { name }) };
+      const dryRun = Boolean(flags['dry-run']);
+      if (!dryRun) {
+        const plan = runAction(opts, { ...req, dryRun: true });
+        if (plan.changes.length) {
+          for (const ch of plan.changes) console.log(`  ${ch}`);
+          if (process.stdin.isTTY && !flags.yes) {
+            for (const n of names) {
+              try {
+                console.log(`  diff ${n}: ${statLine(diffLocal(opts, n).stats)}  (skm diff ${n} --local for details; local edits show as removals)`);
+              } catch {}
+            }
+          }
+          const what = names.length === 1 ? `local ${name}` : `${names.length} local skills (${names.join(', ')})`;
+          if (!(await confirm(`${what} will be replaced by the global copy; the old local copy goes to the system Trash.\nContinue?`, flags))) return console.log('aborted');
+        }
+      }
+      return report(runAction(opts, { ...req, dryRun }), flags);
+    }
+
     case 'delete': {
       if (!name) throw new SkmError('invalid', 'usage: skm delete <name>');
       return perform(opts, { action: 'delete', scope: resolveScope(state, name, flags), name }, flags, { destructive: true });
@@ -548,8 +574,8 @@ async function main(argv, opts = {}) {
     }
 
     case 'diff': {
-      if (!name) throw new SkmError('invalid', 'usage: skm diff <name>');
-      const d = await diffUpstream(opts, name);
+      if (!name) throw new SkmError('invalid', 'usage: skm diff <name> [--local]');
+      const d = flags.local ? diffLocal(opts, name) : await diffUpstream(opts, name);
       if (flags.json) return console.log(JSON.stringify(d, null, 2));
       printDiff(d);
       return;
