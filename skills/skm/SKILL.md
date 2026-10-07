@@ -53,6 +53,7 @@ An ignored folder is not scanned at all, unlike archived. If a project is missin
 | `skm outdated` | check tracked skills against their GitHub source |
 | `skm update <name>` | update from the source (old version goes to the system Trash) |
 | `skm pull <name...>` | copy a global skill, active or inactive, into the current project |
+| `skm refresh <name...>` | replace a project's copy of a skill with the global one (inactive global too); old copy to the Trash |
 | `skm promote <name>` | copy a project skill to the global store |
 | `skm activate\|deactivate <name>` | switch a skill on or off |
 | `skm profile list\|show <name>` | named skill kits (profiles) and where each skill comes from |

@@ -76,7 +76,7 @@ function seed() {
   const l = [
     mk('local', 'atlas-conventions', 'ok', 'Naming, folder layout and review rules for the Atlas monorepo.', { locations: [loc('claude', `${ROOT}/.claude/skills/atlas-conventions`)] }),
     mk('local', 'release-checklist', 'ok', 'Steps for cutting an Atlas release, from changelog to tag and deploy.', { locations: [loc('agents', `${ROOT}/.agents/skills/release-checklist`), loc('claude', `${ROOT}/.claude/skills/release-checklist`)] }),
-    mk('local', 'wrangler', 'diverged', 'Cloudflare Workers CLI, pinned to the Atlas account setup.', { issues: ['Contents differ between agents and claude copies'], locations: [loc('agents', `${ROOT}/.agents/skills/wrangler`), loc('claude', `${ROOT}/.claude/skills/wrangler`)] }),
+    mk('local', 'wrangler', 'diverged', 'Cloudflare Workers CLI, pinned to the Atlas account setup.', { vsGlobal: 'diverged', issues: ['Contents differ between agents and claude copies'], locations: [loc('agents', `${ROOT}/.agents/skills/wrangler`), loc('claude', `${ROOT}/.claude/skills/wrangler`)] }),
     mk('local', 'db-migrations', 'ok', 'Write and verify SQL migrations for the Atlas Postgres schema.', { active: false, locations: [loc('claude', `${ROOT}/.claude/skills-inactive/db-migrations`)] }),
     mk('local', 'half-written', 'empty', '', { issues: ['Folder has no SKILL.md'], locations: [loc('claude', `${ROOT}/.claude/skills/half-written`)], files: 0, bytes: 0 }),
   ];
@@ -118,7 +118,8 @@ function seedProjects() {
   pdb[L] = [
     at(L, 'release-notes', 'ok', 'Draft release notes from merged pull requests. Use when cutting a release.'),
     at(L, 'sql-style', 'ok', 'House style for SQL in the ledger schema. Use when writing or reviewing queries.', { bytes: 14600 }),
-    at(L, 'wrangler', 'ok', 'Cloudflare Workers CLI, ledger flavored.'),
+    at(L, 'wrangler', 'ok', 'Cloudflare Workers CLI, ledger flavored.', { vsGlobal: 'diverged' }),
+    at(L, 'adr-logger', 'ok', 'Document and log architectural decisions (ledger copy, older).', { vsGlobal: 'diverged' }), // global copy is inactive
   ];
   pdb[P] = [
     at(P, 'release-notes', 'ok', 'Draft release notes from merged pull requests. Use when cutting a release.'),
@@ -259,10 +260,12 @@ function applyIgnore(b) {
 const localList = (root) => (!root || root === ROOT ? db.local : pdb[root]);
 function setLocalList(root, arr) { if (!root || root === ROOT) db.local = arr; else pdb[root] = arr; }
 
+/** Local skill vs the global one of the same name: seeded `vsGlobal: 'diverged'`, otherwise identical; null without a global. */
+const vsGlobalOf = (x) => (db.global.some((g) => g.name === x.name) ? x.vsGlobal || 'identical' : null);
 function projectsPayload() {
   const projects = visibleProjects().map((p) => ({
     root: p.root, name: p.name, meta: metaForProject(p.root), auto: pauto[p.root] || {},
-    skills: p.list.map((x) => ({ name: x.name, active: x.active, status: x.status, cost: x.cost, meta: metaOf(x.name) })),
+    skills: p.list.map((x) => ({ name: x.name, active: x.active, status: x.status, cost: x.cost, meta: metaOf(x.name), vsGlobal: vsGlobalOf(x) })),
   }));
   const byName = new Map();
   for (const p of projects) for (const k of p.skills) byName.set(k.name, [...(byName.get(k.name) || []), p.root]);
@@ -404,6 +407,15 @@ function act(d, b) {
       }
       return { body: { ok: true, message: `Copied ${s.name} to ${path.replace(root, '.')}.`, changes: [`copy ${s.locations[0].path} -> ${path}`] } };
     }
+    case 'refresh': {
+      if (g) return err('bad-scope', 'Refresh works on local skills only.', 400);
+      const src = find('global', s.name);
+      if (!src) return err('not-found', `no global skill: ${s.name}`, 404);
+      if (vsGlobalOf(s) === 'identical') return { body: { ok: true, message: `local/${s.name} is already the same as global`, changes: [] } };
+      const changes = [`trash ${s.locations[0].path} -> ${HOME}/.Trash/${s.name}`, `copy ${src.locations[0].path} -> ${s.locations[0].path}`];
+      if (!b.dryRun) Object.assign(s, { vsGlobal: 'identical', description: src.description });
+      return { body: { ok: true, message: `refreshed local/${s.name} from global; the old copy is in the system Trash (${HOME}/.Trash/${s.name})`, changes } };
+    }
     case 'update': {
       if (!g) return err('bad-scope', 'Update works on global skills only.', 400);
       if (!s.origin) return err('not-tracked', `${s.name} has no recorded source, so it cannot be updated.`, 422);
@@ -458,6 +470,15 @@ function diffFor(name) {
   }
   f.push({ path: 'SKILL.md', status: 'modified', binary: false, hunks: [H(5, 4, 5, 5, [' ## Usage', ' ', '-Run the workflow.', '+Run the workflow, then verify the result.', '+Report anything unexpected.'])] });
   return { name, from: '1a2b3c4', to: '5d6e7f8', stats: { added: 0, removed: 0, modified: 1, insertions: count('+'), deletions: count('-') }, files: f };
+}
+
+/** Local -> global: what a refresh would change (local edits show as removals). */
+function localDiffFor(name) {
+  const files = [{ path: 'SKILL.md', status: 'modified', binary: false, hunks: [
+    H(1, 5, 1, 5, [' ---', ` name: ${name}`, '-description: Older local wording kept in this project.', `+description: ${(find('global', name) || {}).description || 'Global description.'}`, ' ---', ' ']),
+    H(20, 4, 20, 6, [' ## Steps', ' ', '-1. Run the old checklist.', '+1. Read the references first.', '+2. Apply the checklist.', '+3. Report what changed.']),
+  ] }, { path: 'references/local-notes.md', status: 'removed', binary: false, hunks: [H(1, 2, 0, 0, ['-# Local notes', '-Only in this project.'])] }];
+  return { name, from: 'local', to: 'global', stats: { added: 0, removed: 1, modified: 1, insertions: 4, deletions: 4 }, files };
 }
 
 // ---- profiles (in memory, same shapes as the real API) ----
@@ -543,11 +564,16 @@ createServer(async (req, res) => {
       return send(res, 200, {
         cwd: noProject ? HOME : `${ROOT}/packages/web`,
         project: noProject ? null : { root: ROOT, name: 'atlas' },
-        global: withMeta(db.global), local: withMeta(db.local), totals, ...metaSummary(),
+        global: withMeta(db.global), local: withMeta(db.local).map((s) => ({ ...s, vsGlobal: vsGlobalOf(s) })), totals, ...metaSummary(),
       });
     }
     if (url.pathname === '/api/diff') {
       await new Promise((r) => setTimeout(r, Number(process.env.MOCK_DIFF_MS || 600)));
+      if (url.searchParams.get('scope') === 'local') {
+        const l = find('local', url.searchParams.get('name'), url.searchParams.get('projectRoot'));
+        if (!l || !find('global', l.name)) return send(res, 404, { ok: false, error: `no global skill: ${url.searchParams.get('name')}`, code: 'not-found' });
+        return send(res, 200, localDiffFor(l.name));
+      }
       const s = find('global', url.searchParams.get('name'));
       if (!s) return send(res, 404, { ok: false, error: 'Skill not found.', code: 'not-found' });
       if (!s.origin) return send(res, 422, { ok: false, error: `${s.name} has no recorded source.`, code: 'not-tracked' });
@@ -638,13 +664,14 @@ createServer(async (req, res) => {
         const changes = [];
         let message = '';
         for (const name of body.names) {
-          const one = act(null, { ...body, names: undefined, name });
+          const one = act(null, { ...body, names: undefined, name, scope: body.action === 'refresh' ? 'local' : body.scope });
           const o = one.body;
           if (o.ok) { results.push({ name, ok: true }); changes.push(...(o.changes || [])); } else results.push({ name, ok: false, error: o.error, code: o.code });
         }
         const okN = results.filter((r) => r.ok).length;
         const all = okN === results.length;
-        message = all ? `${body.dryRun ? 'Would copy' : 'Copied'} ${okN} ${okN === 1 ? 'skill' : 'skills'}.` : `${okN} of ${results.length} succeeded, ${results.length - okN} failed.`;
+        const verb = body.action === 'refresh' ? ['Would update', 'Updated'] : ['Would copy', 'Copied'];
+        message = all ? `${body.dryRun ? verb[0] : verb[1]} ${okN} ${okN === 1 ? 'skill' : 'skills'}.` : `${okN} of ${results.length} succeeded, ${results.length - okN} failed.`;
         return send(res, all ? 200 : 409, { ok: all, message, changes, results });
       }
       const out = act(null, body);

@@ -65,6 +65,7 @@ replacing the claude copy with the symlink; `diverged` is never auto-resolved: n
 | `normalize` | global | see above; optional `keep: "agents"\|"claude"` for diverged |
 | `promote` | local -> global | **copy** local skill to `~/.agents/skills/<name>` + claude symlink; fails if exists unless `overwrite` |
 | `copyToLocal` | global -> local | **copy** to `<root>/.claude/skills/<name>` (or `.agents/skills` via `target: "agents"`); fails if exists unless `overwrite` |
+| `refresh` | global -> local | replace each real local folder that differs from the global copy (active or inactive, only read) with that copy; old folder to the system Trash. See below |
 | `delete` | global/local | move real folders to the system Trash, unlink symlinks (global also removes claude symlink) |
 | `applyProfile` | global -> local | copy every skill of a profile into the project; see "Profiles (skill kits)" |
 
@@ -80,6 +81,7 @@ skm normalize [name|--all] [--keep agents|claude] [--dry-run]
 skm activate|deactivate <name> [--local|--global]
 skm promote <name>      local -> global (copy)
 skm pull <name>         global -> local (copy)   (aka copyToLocal)
+skm refresh <name...>   replace the local copy with the global one (aka refresh)
 skm delete <name> [--local|--global]
 ```
 Name resolution without `--local/--global`: unique match wins, otherwise ask/error.
@@ -330,6 +332,29 @@ skm list [--fav] [--tag <t>]   filters (combine with --json); list shows FAV (*)
 skm pull <name...>          several names at once (same options)
 ```
 Names that are not on disk are rejected for `fav`/`tag` (`not-found`) so typos do not create entries.
+
+## Refresh a local skill from the global copy
+
+When a project skill and a global skill share a name but not content, and the global one is the one to keep.
+
+- `vsGlobal` on local skills in `GET /api/state` and on project skill entries in `/api/projects`: `"identical"`,
+  `"diverged"` or `null` (no global skill of that name, or the local skill has only links). It compares every real
+  local folder with the global source by folder hash. The global source is the same as for `copyToLocal`: active
+  copies first, then inactive ones.
+- Action `refresh` (scope `local`, the default): every real local folder that differs from the global source goes to
+  the system Trash and gets a copy of the global folder in its place. The global side is only read, so an inactive
+  global skill stays inactive. An inactive local skill is refreshed where it lives and stays inactive; local symlinks
+  are left alone. Identical folders are a no-op (`changes: []`). Errors: `no-project`, `not-found` (no global or no
+  local skill), `invalid` (the local skill is only links, or scope is not `local`). Takes `dryRun`, `projectRoot`, and
+  `names` for a batch (same result shape as batch copy: `results` per name, continues past failures).
+- `GET /api/diff?scope=local&name=<name>[&projectRoot=<abs>]` -> local -> global diff (same shape as the update diff,
+  with `from: "local"`, `to: "global"` and the two folder paths), so local edits show up as removals.
+- UI: a "Differs from global" badge and an **Update local from global** button on the local skill card; in the
+  Projects tab, a "Diverged from global" badge with **Update from global** per skill and **Update N from global** on a
+  project card with several. One skill shows the diff before confirming, several show the batch dry run.
+- CLI: `skm refresh <name...> [--dry-run] [--yes]` (in a project; prints the plan and the diff stat, then asks),
+  `skm diff <name> --local [--json]`, and `skm list` marks diverged local skills `[differs]`. No "keep local edits"
+  merge: the diff is the guard, and `promote --overwrite` is the opposite direction.
 
 ## Project index for agents (metadata, find, show, set) and the `skm` skill
 

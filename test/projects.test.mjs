@@ -81,7 +81,7 @@ test('scan: depth, skip rules, never descends into a found project', async () =>
   assert.ok(!all.some((n) => /node_modules|\.hidden|nested|linkdir/.test(n)), all.join());
   const a = (await scan(1)).projects[0];
   assert.deepEqual(a.skills.map((s) => s.name), ['one', 'shared']);
-  assert.deepEqual(Object.keys(a.skills[0]), ['name', 'active', 'status', 'cost', 'meta']);
+  assert.deepEqual(Object.keys(a.skills[0]), ['name', 'active', 'status', 'cost', 'meta', 'vsGlobal']);
 });
 
 test('scan: skills carry active/status and ceil(chars/4) cost', async () => {
