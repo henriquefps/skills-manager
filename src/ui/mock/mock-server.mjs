@@ -2,7 +2,8 @@
 // Usage: node src/ui/mock/mock-server.mjs   (PORT=4748, MOCK_NO_PROJECT=1 for a project-less cwd,
 // MOCK_ROOTS=1 to start with scan roots configured, MOCK_PM_FORBIDDEN=1 to make every
 // POST /api/project-meta answer with the `forbidden` error). Four ignore entries are seeded; they hide
-// five extra mock projects until removed (POST /api/project-ignore keeps the list in memory).
+// five extra mock projects until removed (POST /api/project-ignore keeps the list in memory). Two profiles are seeded
+// (GET/POST /api/profiles and the applyProfile action keep them in memory).
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -338,7 +339,7 @@ function act(d, b) {
     root = b.projectRoot;
     const known = root === ROOT || (visibleProjects().some((p) => p.root === root));
     if (!known) return err('bad-project', `${root} is not inside a configured scan root.`, 400);
-    if (b.scope !== 'local') return err('bad-scope', 'projectRoot only applies to local skills.', 400);
+    if (b.scope !== 'local' && b.action !== 'copyToLocal') return err('bad-scope', 'projectRoot only applies to local skills.', 400);
   }
   const s = find(b.scope, b.name, b.projectRoot);
   if (!s) return err('not-found', b.scope === 'global' ? `no global skill: ${b.name}` : `No ${b.scope} skill named ${b.name}.`, 404);
@@ -459,6 +460,69 @@ function diffFor(name) {
   return { name, from: '1a2b3c4', to: '5d6e7f8', stats: { added: 0, removed: 0, modified: 1, insertions: count('+'), deletions: count('-') }, files: f };
 }
 
+// ---- profiles (in memory, same shapes as the real API) ----
+const PROFILE_SEED = {
+  'capacitor-react-shadcn': ['capacitor-app-checklist', 'cordova-plugins', 'hfps-visuals', 'shadcn-ui'],
+  docs: ['adr-logger', 'hfps-visuals', 'log-session'],
+};
+let profiles = {};
+const resetProfiles = () => { profiles = JSON.parse(JSON.stringify(PROFILE_SEED)); };
+resetProfiles();
+const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
+const profileList = () => Object.keys(profiles).sort().map((name) => ({ name, skills: [...profiles[name]] }));
+function profileOp(b) {
+  const fail = (code, error, status = 400) => ({ status, body: { ok: false, error, code } });
+  const done = (profile) => ({ body: { ok: true, profile, profiles: profileList() } });
+  const name = String(b.name || '').trim().toLowerCase();
+  const cleanSkills = (list) => (Array.isArray(list) ? [...new Set(list.map(String))].sort() : null);
+  if (b.op === 'create') {
+    if (!PROFILE_RE.test(name)) return fail('invalid', `invalid profile name ${JSON.stringify(b.name)}: use 1-48 characters from a-z, 0-9 and "-"`);
+    const skills = cleanSkills(b.skills);
+    if (!skills || !skills.length) return fail('invalid', 'a profile needs at least one skill');
+    if (profiles[name] && !b.overwrite) return fail('exists', `profile already exists: ${name} (use overwrite)`, 409);
+    profiles[name] = skills;
+    return done({ name, skills });
+  }
+  if (!profiles[name]) return fail('not-found', `no profile named "${name}"`, 404);
+  if (b.op === 'delete') {
+    const profile = { name, skills: profiles[name] };
+    delete profiles[name];
+    return done(profile);
+  }
+  if (b.op === 'update') {
+    const skills = b.skills ? cleanSkills(b.skills) : profiles[name];
+    if (!skills.length) return fail('invalid', 'a profile needs at least one skill');
+    const to = b.rename === undefined ? name : String(b.rename).trim().toLowerCase();
+    if (!PROFILE_RE.test(to)) return fail('invalid', `invalid profile name ${JSON.stringify(b.rename)}: use 1-48 characters from a-z, 0-9 and "-"`);
+    if (to !== name && profiles[to]) return fail('exists', `profile already exists: ${to}`, 409);
+    delete profiles[name];
+    profiles[to] = skills;
+    return done({ name: to, skills });
+  }
+  return fail('invalid', `unknown profile op: ${b.op}`);
+}
+function applyProfileMock(b) {
+  const p = profiles[b.profile];
+  if (!p) return { status: 404, body: { ok: false, error: `no profile named "${b.profile}"`, code: 'not-found' } };
+  if (noProject && !b.projectRoot) return { status: 400, body: { ok: false, error: 'no project detected from the current directory', code: 'no-project' } };
+  const target = b.target === 'agents' ? 'agents' : 'claude';
+  const results = [];
+  const changes = [];
+  for (const name of p) {
+    const here = find('local', name, b.projectRoot);
+    if (here && !here.active) { results.push({ name, status: 'skipped', reason: 'inactive in this project' }); continue; }
+    if (here && !b.overwrite) { results.push({ name, status: 'skipped', reason: 'already in this project' }); continue; }
+    if (!find('global', name)) { results.push({ name, status: 'missing', error: `no global skill: ${name}` }); continue; }
+    const one = act(null, { action: 'copyToLocal', scope: 'global', name, target, overwrite: !!b.overwrite, dryRun: b.dryRun, projectRoot: b.projectRoot }).body;
+    if (one.ok) { results.push({ name, status: 'copied', target }); changes.push(...(one.changes || [])); } else results.push({ name, status: 'failed', error: one.error, code: one.code });
+  }
+  const of = (st) => results.filter((r) => r.status === st).map((r) => r.name);
+  const [copied, skipped, missing, failed] = ['copied', 'skipped', 'missing', 'failed'].map(of);
+  const parts = [`copied ${copied.length}`, skipped.length && `skipped ${skipped.length}`, missing.length && `${missing.length} missing from global`, failed.length && `${failed.length} failed`].filter(Boolean);
+  const message = `${b.dryRun ? 'dry run: ' : ''}applied profile ${b.profile}: ${parts.join(', ')}`;
+  return { status: failed.length ? 409 : 200, body: { ok: !failed.length, message, changes, results, copied, skipped, missing, failed } };
+}
+
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 const send = (res, status, body) => {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -528,9 +592,19 @@ createServer(async (req, res) => {
       seed();
       resetProjectMeta();
       ignore = [...IGNORE_SEED];
+      resetProfiles();
       for (const k of Object.keys(metaDb)) delete metaDb[k];
       Object.assign(metaDb, JSON.parse(metaSeed));
       return send(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/profiles') {
+      if (req.method === 'POST') {
+        let raw = '';
+        for await (const c of req) raw += c;
+        const out = profileOp(JSON.parse(raw || '{}'));
+        return send(res, out.status || 200, out.body);
+      }
+      return send(res, 200, { file: `${HOME}/.config/skm/profiles.json`, profiles: profileList() });
     }
     if (url.pathname === '/api/project-ignore' && req.method === 'POST') {
       let raw = '';
@@ -554,6 +628,10 @@ createServer(async (req, res) => {
       let raw = '';
       for await (const c of req) raw += c;
       const body = JSON.parse(raw || '{}');
+      if (body.action === 'applyProfile') {
+        const out = applyProfileMock(body);
+        return send(res, out.status || 200, out.body);
+      }
       if (Array.isArray(body.names)) {
         // Batch: continue past failures; top-level ok only if every item succeeded.
         const results = [];

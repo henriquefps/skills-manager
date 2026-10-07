@@ -78,7 +78,8 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - see **lint** findings per skill and filter by them;
 - open the **Projects** tab to browse your projects (what they are, their stack, tags and status) and their skills;
 - switch the **theme** (System, Light or Dark) with the toggle in the top right corner; your choice is remembered in the browser;
-- mark skills as **favorites**, add **tags**, filter by them, and copy several skills into the project at once.
+- mark skills as **favorites**, add **tags**, filter by them, and copy several skills into the project at once;
+- keep **profiles** (named skill kits) in the **Profiles** tab and **Apply** one to a project in one step.
 
 ![skm in dark mode](docs/img/screenshot-dark.png)
 
@@ -114,6 +115,7 @@ skm projects ignore <name|path|glob...>   |   skm projects unignore <entry...>  
 skm projects set <name|path>   [--desc "..."] [--tags a,b] [--add-tag t] [--rm-tag t] [--status active|paused|archived] [--note "..."] [--clear desc|tags|notes|status]
 skm projects add <path>   |   skm projects rm <path>   |   skm projects depth <n>
 skm config                # show the config file path and content
+skm profile list|show|save|apply|rm   # named skill kits (skm profile --help)
 ```
 
 General options: `--yes` (skip confirmation), `--dry-run` (only show what would happen),
@@ -168,6 +170,32 @@ Favorites and tags are saved by skill name in `~/.config/skm/config.json`, next 
 folders, so they belong to your machine and never touch the skill folders.
 
 ![skm: favorites, tags and batch copy](docs/img/screenshot-favorites.png)
+
+## Profiles: skill kits for new projects
+
+A **profile** is a named list of skills, for example `capacitor-react-shadcn` or `docs`. Applying it to a project
+copies every skill in it, the same way **Copy to local** does: skills already in the project are skipped (or
+replaced with **Overwrite**, the old copy going to the system Trash), names that have no global skill are reported
+as missing, and inactive global skills are copied but stay inactive in global. Saving a project's setup as a profile
+stores its active skills, so a setup moves from one project to the next.
+
+```sh
+skm profile save mobile capacitor-app-checklist cordova-plugins hfps-visuals   # from a list of skills
+skm profile save atlas                       # from inside a project: its active skills
+skm profile list                             # every profile and its skills
+skm profile show mobile                      # where each skill comes from (global active / inactive / missing)
+skm profile apply mobile --dry-run           # from inside the new project: see what would be copied
+skm profile apply mobile                     # [--target agents|claude] [--overwrite]
+skm profile rm mobile                        # removes the profile only, never a skill folder
+```
+
+In the UI, the **Profiles** tab creates, renames, edits and deletes profiles (with Undo), and each project card in
+**Projects** has **Apply profile** and **Save as profile**. Every apply shows a preview first.
+
+Profiles are stored in `~/.config/skm/profiles.json`, a separate file from the config so it is easy to share.
+A profile holds skill names only, no versions.
+
+![skm: profiles](docs/img/screenshot-profiles.png)
 
 ## Context cost
 

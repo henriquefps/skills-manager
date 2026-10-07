@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkUpdates, diffUpstream, getSkill, getState, projectContext, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from './core/index.mjs';
+import { checkUpdates, deleteProfile, diffUpstream, getSkill, getState, profilesPath, projectContext, readConfig, readProfiles, resolveContext, runAction, saveProfile, saveProjectProfile, scanProjects, searchProjects, SkmError, updateIgnore, updateMeta, updateProfile, updateProjectMeta, writeConfig } from './core/index.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const MIME = {
@@ -78,6 +78,18 @@ function serveStatic(res, pathname) {
   fs.createReadStream(file).pipe(res);
 }
 
+/** POST /api/profiles: `op` is create | update | delete | saveProject. Answers with the profile and the full list. */
+function profileOp(ctx, body) {
+  const { op, ...req } = body ?? {};
+  let profile;
+  if (op === 'create') profile = saveProfile(ctx, req);
+  else if (op === 'update') profile = updateProfile(ctx, req);
+  else if (op === 'delete') profile = deleteProfile(ctx, req.name);
+  else if (op === 'saveProject') profile = saveProjectProfile(req.projectRoot === undefined ? ctx : projectContext(ctx, req.projectRoot), req);
+  else throw new SkmError('invalid', `unknown profile op: ${op}`);
+  return { ok: true, profile, profiles: readProfiles(ctx) };
+}
+
 /** Build the request handler. `opts` = { home, cwd, fetch, git, token } (injectable roots and edges). */
 export function createServer(opts = {}) {
   const base = resolveContext(opts);
@@ -117,6 +129,13 @@ export function createServer(opts = {}) {
         const scan = await scanProjects(ctx);
         const q = url.searchParams.get('q');
         return sendJson(res, 200, q?.trim() ? { ...scan, projects: searchProjects(scan.projects, q) } : scan);
+      }
+
+      // profiles (skill kits)
+      if (url.pathname === '/api/profiles' && req.method === 'GET') return sendJson(res, 200, { file: profilesPath(ctx.home), profiles: readProfiles(ctx) });
+      if (url.pathname === '/api/profiles' && req.method === 'POST') {
+        refuseCrossOrigin(req);
+        return sendJson(res, 200, profileOp(ctx, await readJson(req)));
       }
 
       if (url.pathname === '/api/skill' && req.method === 'GET') {

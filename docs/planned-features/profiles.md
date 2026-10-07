@@ -1,6 +1,6 @@
 # Planned: profiles (skill kits) and project setups
 
-Status: planned, not started.
+Status: shipped (2026-10-07). See "Profiles (skill kits)" in docs/ARCHITECTURE.md.
 
 ## Why
 
