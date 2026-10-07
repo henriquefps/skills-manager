@@ -1436,6 +1436,7 @@
         h('span', { class: 'meta', text: `${p.skills.length} ${p.skills.length === 1 ? 'skill' : 'skills'}` }),
         h('div', { class: 'actions' },
           h('button', { class: 'btn small', type: 'button', 'data-fk': `pe:${p.root}`, 'aria-label': `Edit ${p.name}`, text: 'Edit', onclick: () => openProjectEditor(p) }),
+          h('button', { class: 'btn small', type: 'button', 'data-fk': `pin:${p.root}`, 'aria-label': `Instruction files of ${p.name}`, title: 'CLAUDE.md, AGENTS.md and the global file: links, copies and differences', text: 'Instructions', onclick: () => openInstructions(p) }),
           h('button', { class: 'btn small', type: 'button', text: 'Copy from global', onclick: () => copyFromGlobal(p) }),
           diverged.length > 1 ? h('button', { class: 'btn small', type: 'button', 'data-fk': `prfa:${p.root}`, text: `Update ${diverged.length} from global`, title: `Diverged from global: ${diverged.join(', ')}`, onclick: () => refreshFromGlobal(diverged, p) }) : null,
           h('button', { class: 'btn small', type: 'button', 'data-fk': `pa:${p.root}`, 'aria-label': `Apply a profile to ${p.name}`, text: 'Apply profile', onclick: () => applyProfile({ root: p.root, name: p.name, skills: p.skills }) }),
@@ -1556,6 +1557,85 @@
       form));
     if (!dlg.open) dlg.showModal();
     desc.focus();
+  }
+
+  // ---------- instruction files (read only) ----------
+
+  const instrName = (id) => (id === 'global' ? '~/.claude/CLAUDE.md' : id);
+
+  function instrRow(f) {
+    const kind = f.kind === 'broken-symlink' ? h('span', { class: 'badge bad', text: 'Broken link' })
+      : f.linksTo ? h('span', { class: 'badge accent', title: f.target ? `Symlink to ${f.target}` : null, text: `Link to ${instrName(f.linksTo)}` })
+        : f.kind === 'symlink' ? h('span', { class: 'badge plain', title: f.target, text: 'Symlink' })
+          : f.kind === 'missing' ? h('span', { class: 'badge plain', text: 'Missing' }) : null;
+    return h('li', { class: `irow${f.kind === 'missing' ? ' missing' : ''}` },
+      h('div', { class: 'irow-main' },
+        h('span', { class: 'iname', text: instrName(f.id) }),
+        h('div', { class: 'badges' }, f.scope === 'global' ? h('span', { class: 'badge plain', text: 'Global' }) : null, kind),
+        f.lines !== undefined ? h('span', { class: 'meta', text: `${f.lines} ${f.lines === 1 ? 'line' : 'lines'}, ~${fmtTok(f.tokens)} tok` }) : null),
+      h('span', { class: 'meta mono ipath', title: f.path, text: shortPath(f.path) }));
+  }
+
+  /** The instruction files drawer: which files exist, links, plain copies and differences, and a diff of any two. Nothing here writes. */
+  async function openInstructions(p) {
+    const dlg = $('#drawer');
+    const closeBtn = h('button', { class: 'btn small ghost', type: 'button', text: 'Close', onclick: () => dlg.close() });
+    const body = h('div', { class: 'drawer-body' }, h('div', { class: 'loading', text: 'Reading instruction files.' }));
+    dlg.replaceChildren(h('div', { class: 'drawer-inner' },
+      h('div', { class: 'drawer-head' },
+        h('div', {}, h('div', { class: 'badges' }, h('span', { class: 'badge plain', text: 'Read only' })),
+          h('h2', { id: 'drawer-title', text: `Instructions in ${p.name}` }),
+          h('p', { class: 'meta mono', text: p.root })),
+        closeBtn),
+      body));
+    if (!dlg.open) dlg.showModal();
+    closeBtn.focus();
+
+    let r;
+    try {
+      r = await api(`/api/instructions?projectRoot=${encodeURIComponent(p.root)}`);
+    } catch (e) {
+      body.replaceChildren(h('p', { class: 'issues bad', text: e.message }));
+      return;
+    }
+    const readable = [...r.files, r.global].filter((f) => f.kind === 'file' || f.kind === 'symlink');
+    const out = h('div', { class: 'idiff', 'aria-live': 'polite' });
+    const pick = (name, label) => h('select', { name, 'aria-label': label }, readable.map((f) => h('option', { value: f.id, text: instrName(f.id) })));
+    const selA = pick('a', 'Old file');
+    const selB = pick('b', 'New file');
+    const showDiff = async (a, b) => {
+      selA.value = a;
+      selB.value = b;
+      if (a === b) { out.replaceChildren(h('p', { class: 'meta', text: 'Pick two different files.' })); return; }
+      out.replaceChildren(h('div', { class: 'loading', text: 'Comparing.' }));
+      try {
+        const d = await api(`/api/instructions/diff?projectRoot=${encodeURIComponent(p.root)}&a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
+        out.replaceChildren(d.relation === 'link'
+          ? h('p', { class: 'meta', text: `${instrName(a)} and ${instrName(b)} are the same file: one is a symlink to the other.` })
+          : diffView(d, false, d.relation === 'identical'
+            ? `${instrName(b)} is a plain copy of ${instrName(a)}.`
+            : `Lines only in ${instrName(a)} show as removed, lines only in ${instrName(b)} as added.`));
+      } catch (e) {
+        out.replaceChildren(h('p', { class: 'issues bad', text: e.message }));
+      }
+    };
+    const findings = r.findings.length
+      ? h('ul', { class: 'issues' }, r.findings.map((f) => h('li', { class: 'ifinding' },
+        f.message,
+        f.files.length === 2 ? h('button', { class: 'btn small ghost ifind', type: 'button', text: 'Show diff', onclick: () => showDiff(f.files[0], f.files[1]) }) : null)))
+      : h('p', { class: 'meta', text: r.files.length ? 'No plain copies and no conflicting files. Symlinks are fine.' : 'This project has no CLAUDE.md, AGENTS.md, CLAUDE.local.md or .claude/CLAUDE.md.' });
+    body.replaceChildren(...[
+      h('div', {}, h('h3', { class: 'section-label', text: 'Files' }),
+        h('ul', { class: 'irows' }, [...r.files, r.global].map(instrRow))),
+      h('div', {}, h('h3', { class: 'section-label', text: 'Findings' }), findings),
+      readable.length > 1 ? h('div', {}, h('h3', { class: 'section-label', text: 'Compare' }),
+        h('div', { class: 'icompare' }, selA, h('span', { class: 'meta', text: 'to' }), selB,
+          h('button', { class: 'btn small', type: 'button', text: 'Show diff', onclick: () => showDiff(selA.value, selB.value) })),
+        out) : null,
+      h('p', { class: 'meta', text: 'Read only: skm does not edit instruction files yet.' })].filter(Boolean));
+    const first = r.findings.find((f) => f.kind === 'differs') ?? r.findings.find((f) => f.files.length === 2);
+    if (first) showDiff(first.files[0], first.files[1]);
+    else if (readable.length > 1) { selA.value = readable[0].id; selB.value = readable[1].id; }
   }
 
   function projectSkillRow(p, k, maxCost) {

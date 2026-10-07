@@ -510,3 +510,45 @@ create, rename and edit members in a drawer, delete with Undo, "Save <project> a
 each profile card for the current project, and **Apply profile** / **Save as profile** on every project card in the
 Projects tab. Apply opens the confirm dialog with a dry-run preview (target, overwrite) and ends with a per-skill
 results dialog.
+
+## Instruction files (CLAUDE.md / AGENTS.md), read only
+
+Phase 1 of `docs/planned-features/instructions-management.md`. Core: `src/core/instructions.mjs`; nothing in it writes.
+
+Files: `CLAUDE.md`, `AGENTS.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` at the project root (`INSTRUCTION_FILES`, nested
+files are out of scope) plus the global `<home>/.claude/CLAUDE.md` (id `global`; `home` is the injected one / `SKM_HOME`).
+
+`listInstructions(opts, root?)` (root defaults to the current project; none = only the global file) ->
+```json
+{ "project": { "root": "/abs", "name": "atlas" } | null,
+  "files": [{ "id": "AGENTS.md", "scope": "project", "path": "/abs/AGENTS.md", "kind": "file|symlink|broken-symlink",
+              "target": "CLAUDE.md", "real": "/abs/CLAUDE.md", "linksTo": "CLAUDE.md",
+              "bytes": 210, "lines": 13, "tokens": 53, "mtime": "..." }],
+  "global": { "id": "global", "scope": "global", "kind": "file|symlink|broken-symlink|missing", ... },
+  "pairs": [{ "a": "CLAUDE.md", "b": "AGENTS.md", "relation": "link|identical|differs" }],
+  "findings": [{ "kind": "copy|differs|broken", "files": ["CLAUDE.md", "AGENTS.md"], "message": "..." }] }
+```
+`files` holds only the project files that exist. Files with the same real path are one file (`link` pair, `linksTo`
+names the other one, preferring a regular file); copies with the same bytes are one content (`identical` pair, a `copy`
+finding); only the first of each is compared with the rest, so a link or a copy never produces extra findings.
+`differs` is a finding only between two of `CLAUDE.md`, `AGENTS.md`, `.claude/CLAUDE.md`; `CLAUDE.local.md` and the
+global file are meant to differ. A link is valid and never a finding; a broken symlink is (`broken`).
+
+`diffInstructions(opts, a, b, root?)`: `a`/`b` are an id from `INSTRUCTION_FILES`, `global` or `~/.claude/CLAUDE.md`
+(anything else is `invalid`, so no arbitrary path is read). Uses `diffLines` from `diff.mjs` (old = a, new = b) and
+returns the `diffTrees` shape so the CLI (`statLine`) and the UI (`diffView`) render it like a skill diff:
+`{ a: { id, path }, b: { id, path }, project, relation, stats, files: [{ path: "CLAUDE.md -> AGENTS.md", status:
+"modified", binary: false, hunks }] }` (`files` empty for `link` / `identical`). Errors: `not-found` (missing or broken),
+`invalid` (unknown or the same file), `no-project`.
+
+HTTP: `GET /api/instructions[?projectRoot=<abs>]` and `GET /api/instructions/diff?a=&b=[&projectRoot=<abs>]`;
+`projectRoot` goes through `projectContext` (configured roots only, `forbidden` 403 otherwise).
+
+CLI: `skm instructions [name|path] [--json]` (table, then findings with the `skm instructions diff` line to run),
+`skm instructions diff <a> <b> [--project <name|path>] [--json]`; `skm projects show` adds an `instructions` row with
+the findings, and `instructions` in its `--json`.
+
+UI: **Instructions** on each project card opens a read-only drawer: the files (link, broken link, global badges, lines,
+tokens), the findings with a **Show diff** each, and a Compare picker; the first `differs` (or copy) finding's diff is
+shown on open. The mock server (`src/ui/mock/mock-server.mjs`) seeds atlas (CLAUDE.md and AGENTS.md differ), ledger
+(AGENTS.md -> CLAUDE.md) and pixel-site (a plain copy, and a link to the global file).
