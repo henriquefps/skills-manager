@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { isHomeRelative, isPathLike } from '../src/core/pathkind.mjs';
-import { assertSkillsExist, checkUpdates, configPath, deleteProfile, describeProject, diffLocal, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, profilesPath, projectDescription, projectStatus, readConfig, readProfiles, getProfile, resolveContext, runAction, saveProfile, saveProjectProfile, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
+import { assertSkillsExist, checkHealth, checkUpdates, configPath, deleteProfile, describeProject, diffLocal, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, profilesPath, projectDescription, projectStatus, readConfig, readProfiles, getProfile, resolveContext, runAction, saveProfile, saveProjectProfile, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -34,6 +34,8 @@ const USAGE = `skm: skills manager
   skm projects unignore <entry|name|path...>   |   skm projects ignored [--json]   list entries and how many folders each hides
   skm projects add|rm <path>   |   skm projects depth <n>   |   skm config
   skm profile list|show|save|apply|rm   named skill kits (skm profile --help)
+  skm check [--json] [--global|--local|--projects]   broken links, missing sources, forgotten inactive folders and
+                          diverged duplicates, each with a fix; exit 1 on errors (default: global + this project)
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
 Env: SKM_HOME overrides the home directory.`;
@@ -521,6 +523,49 @@ async function profileCommand(opts, state, [sub = 'list', name, ...rest], flags)
   }
 }
 
+// ---- health check --------------------------------------------------------
+
+const SEVERITY_PAINT = { error: c.red, hint: c.yellow };
+
+/** The CLI command behind a fix request; another project than the current one gets a `cd` in front. */
+function fixCommand(r, ctx) {
+  const flag = ` --${r.scope}`;
+  const cmd = {
+    delete: `skm delete ${r.name}${flag}`,
+    activate: `skm activate ${r.name}${flag}`,
+    normalize: `skm normalize ${r.name}${r.keep ? ` --keep ${r.keep}` : ''}`,
+    refresh: `skm refresh ${r.name}`,
+    promote: `skm promote ${r.name}${r.overwrite ? ' --overwrite' : ''}`,
+  }[r.action] ?? `skm ${r.action} ${r.name}`;
+  return r.projectRoot && r.projectRoot !== ctx.project?.root ? `cd ${JSON.stringify(r.projectRoot)} && ${cmd}` : cmd;
+}
+
+async function checkCommand(opts, flags) {
+  const ctx = resolveContext(opts);
+  const scope = flags.projects ? 'projects' : flags.local ? 'local' : flags.global ? 'global' : undefined;
+  const result = await checkHealth(ctx, { scope });
+  if (result.counts.error) process.exitCode = 1;
+  if (flags.json) return console.log(JSON.stringify(result, null, 2));
+  const where = [result.checked.global && 'global', ...result.checked.projects.map((p) => p.name)].filter(Boolean).join(' + ');
+  const { error, hint } = result.counts;
+  if (!result.findings.length) return console.log(`${c.green('no problems found')} ${c.dim(`(${where})`)}`);
+  console.log(`${error} ${error === 1 ? 'error' : 'errors'}, ${hint} ${hint === 1 ? 'hint' : 'hints'} ${c.dim(`(${where})`)}`);
+  for (const sev of ['error', 'hint']) {
+    const list = result.findings.filter((f) => f.severity === sev);
+    if (!list.length) continue;
+    console.log(`\n${c.bold(sev === 'error' ? 'ERRORS' : 'HINTS')}`);
+    for (const f of list) {
+      const at = f.scope === 'global' ? 'global/' : !f.project ? '' : f.project.root === ctx.project?.root ? 'local/' : `${f.project.name}/`;
+      console.log(`${SEVERITY_PAINT[sev](sev.padEnd(5))} ${c.bold(`${at}${f.name}`)}  ${f.type}`);
+      console.log(`      ${f.message}`);
+      if (f.kind === 'across-projects') for (const p of f.paths) console.log(c.dim(`      ${p}`));
+      for (const fx of f.fixes) console.log(`      fix: ${fixCommand(fx.request, ctx)}   ${c.dim(`(${fx.label.toLowerCase()})`)}`);
+      if (f.manual) console.log(`      ${f.fixes.length ? '' : 'fix: '}${f.manual}`);
+    }
+  }
+  console.log(c.dim('\nevery fix asks before it changes anything (--dry-run to preview); deleted folders go to the system Trash'));
+}
+
 // ---- commands ------------------------------------------------------------
 
 async function main(argv, opts = {}) {
@@ -568,6 +613,9 @@ async function main(argv, opts = {}) {
       if (!state.tags.length) return console.log('no tags in use: add one with `skm tag <name> <tag>`');
       return console.log(table([['TAG', 'SKILLS'].map((h) => c.bold(h)), ...state.tags.map((t) => [t.tag, String(t.count)])]));
     }
+
+    case 'check':
+      return checkCommand(opts, flags);
 
     case 'doctor': {
       const bad = listAll(state).filter((s) => s.issues.length || s.status !== 'ok');

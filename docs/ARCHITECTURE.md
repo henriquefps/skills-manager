@@ -510,3 +510,38 @@ create, rename and edit members in a drawer, delete with Undo, "Save <project> a
 each profile card for the current project, and **Apply profile** / **Save as profile** on every project card in the
 Projects tab. Apply opens the confirm dialog with a dry-run preview (target, overwrite) and ends with a per-skill
 results dialog.
+
+## Health check (broken/orphan skills, duplicates)
+
+Core: `checkHealth(opts, { scope })` in `src/core/health.mjs`. It reuses the scan (`scanScope`, `locations`, `lint`,
+`meta`, `origin`), `compareWithGlobal` (`vsGlobal`) and `scanProjects` (`repeated`); it never writes.
+`scope`: omitted = global + the current project, `global`, `local` (current project; `no-project` without one),
+`projects` (global + every scanned project + the current one). Anything else is `invalid`.
+
+| type | severity | when | fixes (`request` is a `POST /api/action` body) |
+| --- | --- | --- | --- |
+| `broken-link` | error | a symlink entry (active or inactive root) points at nothing, and the skill still has an active entry that works or is inactive | global claude link next to a real agents folder: `normalize`; only links: `delete` (unlinks); otherwise `manual` |
+| `missing-source` | error | `kind: "link"`: an active skill whose every active entry is a broken link (reported instead of `broken-link`); `kind: "skill-md"`: an active folder without `SKILL.md` | `delete` (`manual`: add a SKILL.md) |
+| `forgotten-inactive` | hint | an inactive real folder that is empty (no files or no `SKILL.md`), or unreferenced (no profile, favorite, tag or lock entry) and older than `OLD_DAYS` (180, by `mtime`, `now` injectable); `reasons` lists `empty`, `unreferenced`, `old` | `activate` (not when empty), `delete` |
+| `diverged` | hint | `kind: "vs-global"`: `vsGlobal === "diverged"`; `kind: "copies"`: status `diverged` (agents vs claude copies); `kind: "across-projects"` (scope `projects` only): a `repeated` name, not identical, not in global | `refresh`, `promote` with `overwrite`; global copies: `normalize` with `keep`; local copies and across-projects: `manual` only |
+
+The description-similarity check from the planned feature is deferred.
+
+Result (`GET /api/health?scope=...`, `skm check --json`):
+```json
+{ "scope": null, "checked": { "global": true, "projects": [{ "root": "/abs/project", "name": "project" }] },
+  "counts": { "error": 1, "hint": 1 },
+  "findings": [ { "id": "missing-source:link:global::gone", "type": "missing-source", "kind": "link", "severity": "error",
+                  "scope": "global", "name": "gone", "project": null,
+                  "message": "active, but its source is missing: /abs/.claude/skills/gone -> ../../.agents/skills/gone",
+                  "paths": ["/abs/.claude/skills/gone"], "manual": null,
+                  "fixes": [ { "label": "Remove the link", "request": { "action": "delete", "scope": "global", "name": "gone" } } ] } ] }
+```
+Findings are sorted errors first, then global before projects, then by project and name. Local findings carry `project`
+and their fix requests carry `projectRoot`. The response has no `ok` field (it is a report, not an action).
+
+CLI: `skm check [--json] [--global|--local|--projects]` prints findings grouped by severity with the `skm` command of
+each fix (a `cd <root> &&` prefix for another project); exit code 1 when there is an error, also with `--json`.
+UI: a **Health** tab (scope select, Check again, Errors and Hints sections, one button per fix). A fix opens the
+confirm dialog with the dry-run preview (`refresh` reuses the local -> global diff dialog), then reloads the check.
+

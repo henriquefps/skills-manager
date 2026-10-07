@@ -3,7 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { checkUpdates, deleteProfile, diffLocal, diffUpstream, getSkill, getState, profilesPath, projectContext, readConfig, readProfiles, resolveContext, runAction, saveProfile, saveProjectProfile, scanProjects, searchProjects, SkmError, updateIgnore, updateMeta, updateProfile, updateProjectMeta, writeConfig } from './core/index.mjs';
+import { checkHealth, checkUpdates, deleteProfile, diffLocal, diffUpstream, getSkill, getState, profilesPath, projectContext, readConfig, readProfiles, resolveContext, runAction, saveProfile, saveProjectProfile, scanProjects, searchProjects, SkmError, updateIgnore, updateMeta, updateProfile, updateProjectMeta, writeConfig } from './core/index.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const MIME = {
@@ -103,6 +103,7 @@ export function createServer(opts = {}) {
 
       if (url.pathname === '/api/state' && req.method === 'GET') return sendJson(res, 200, getState(ctx));
       if (url.pathname === '/api/updates' && req.method === 'GET') return sendJson(res, 200, await checkUpdates(ctx));
+      if (url.pathname === '/api/health' && req.method === 'GET') return sendJson(res, 200, await checkHealth(ctx, { scope: url.searchParams.get('scope') || undefined }));
       if (url.pathname === '/api/diff' && req.method === 'GET') {
         const name = url.searchParams.get('name');
         if (url.searchParams.get('scope') !== 'local') return sendJson(res, 200, await diffUpstream(ctx, name));

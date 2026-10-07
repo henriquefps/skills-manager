@@ -1,6 +1,6 @@
 # Planned: broken/orphan skills, and duplicates and conflicts
 
-Status: planned, not started.
+Status: shipped (2026-10-07).
 
 ## Broken and orphan skills
 

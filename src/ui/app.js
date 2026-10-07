@@ -84,6 +84,10 @@
     showArchived: false, // Projects tab: archived projects are hidden until asked for
     profiles: null, // GET /api/profiles payload, loaded when the Profiles tab (or an Apply profile dialog) first needs it
     profilesError: null,
+    health: null, // GET /api/health payload, loaded when the Health tab is first opened
+    healthError: null,
+    healthLoading: false,
+    healthScope: '', // '' = global + this project, 'global', 'projects'
   };
 
   const TAG_RE = /^[a-z0-9-]{1,24}$/;
@@ -96,7 +100,7 @@
     archived: { label: 'Archived', tone: 'plain' },
   };
 
-  const SCOPES = ['global', 'local', 'projects', 'profiles'];
+  const SCOPES = ['global', 'local', 'projects', 'profiles', 'health'];
   const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
   const SEVERITY = { error: { label: 'error', one: 'error', many: 'errors', tone: 'bad' }, warn: { label: 'warn', one: 'warning', many: 'warnings', tone: 'warn' }, info: { label: 'info', one: 'note', many: 'notes', tone: 'info' } };
   const SEV_ORDER = ['error', 'warn', 'info'];
@@ -209,6 +213,7 @@
     render();
     if (state.profiles) await loadProfiles();
     if (state.projects) await loadProjects();
+    if (state.health) await loadHealth();
   }
 
   const resultOf = (s) => (state.updates && s.scope === 'global' && s.origin ? state.updates.results[s.name] || null : null);
@@ -339,7 +344,7 @@
 
   function renderBanner() {
     const el = $('#banner');
-    if (!state.data || state.scope === 'projects' || state.scope === 'profiles') { el.hidden = true; return; }
+    if (!state.data || state.scope === 'projects' || state.scope === 'profiles' || state.scope === 'health') { el.hidden = true; return; }
     const bad = problems(skillsOf('global'));
     const localBad = problems(skillsOf('local'));
     const fixable = fixAllTargets();
@@ -378,8 +383,12 @@
     const fc = $('#count-profiles');
     fc.hidden = !state.profiles;
     fc.textContent = state.profiles ? state.profiles.profiles.length : 0;
+    const hc = $('#count-health');
+    hc.hidden = !state.health;
+    hc.textContent = state.health ? state.health.findings.length : 0;
     const proj = state.scope === 'projects';
-    const prof = state.scope === 'profiles';
+    const prof = state.scope === 'profiles' || state.scope === 'health';
+    const health = state.scope === 'health';
     $('#chips').hidden = prof;
     $('#sort-box').hidden = proj || prof;
     $('#sort').value = state.sort;
@@ -390,10 +399,10 @@
       tab.tabIndex = on ? 0 : -1;
     }
     $('#list').setAttribute('aria-labelledby', `tab-${state.scope}`);
-    $('#search').placeholder = proj ? 'Search projects' : prof ? 'Search profiles' : 'Search skills';
+    $('#search').placeholder = proj ? 'Search projects' : health ? 'Search findings' : prof ? 'Search profiles' : 'Search skills';
     $('label[for="search"]').textContent = proj
       ? 'Search projects by name, tag, description, stack, notes, README or remote'
-      : prof ? 'Search profiles by name or skill' : 'Search skills by name, description or tag';
+      : health ? 'Search findings by skill name, project or message' : prof ? 'Search profiles by name or skill' : 'Search skills by name, description or tag';
   }
 
   function chipDefs(skills) {
@@ -454,7 +463,7 @@
   function renderChips() {
     const box = $('#chips');
     if (state.scope === 'projects') { renderProjectChips(box); return; }
-    if (state.scope === 'profiles') { box.replaceChildren(); return; }
+    if (state.scope === 'profiles' || state.scope === 'health') { box.replaceChildren(); return; }
     box.setAttribute('aria-label', 'Filter by status');
     const defs = chipDefs(skillsOf(state.scope));
     const cur = defs.find((c) => c.id === state.filter);
@@ -481,7 +490,7 @@
     const noun = proj ? 'projects' : 'skills';
     if (proj ? state.projects : state.data) for (const t of [...sel]) if (!tags.some((x) => x.tag === t)) sel.delete(t);
     $('#tag-suggest').replaceChildren(...tagList().map((t) => h('option', { value: t.tag })));
-    box.hidden = !state.data || !tags.length || state.scope === 'profiles';
+    box.hidden = !state.data || !tags.length || state.scope === 'profiles' || state.scope === 'health';
     if (box.hidden) return;
     box.replaceChildren(...[
       h('span', { class: 'tagbar-label', id: 'tagbar-label', text: proj ? 'Project tags' : 'Tags' }),
@@ -522,6 +531,7 @@
     }
     if (state.scope === 'projects') { renderProjects(list); return; }
     if (state.scope === 'profiles') { renderProfiles(list); return; }
+    if (state.scope === 'health') { renderHealth(list); return; }
     if (state.scope === 'local' && !state.data.project) {
       list.append(emptyState('No project here',
         'Local skills live inside a project folder. Run skm from a folder that has .git, .agents or .claude to manage them.'));
@@ -2017,6 +2027,125 @@
     close.focus();
   }
 
+  // ---------- health (broken/orphan skills, duplicates) ----------
+
+  const FINDING = {
+    'broken-link': { label: 'Broken link' },
+    'missing-source': { label: 'Missing source' },
+    'forgotten-inactive': { label: 'Forgotten inactive' },
+    'diverged': { label: 'Diverged' },
+  };
+  const HEALTH_SCOPES = [
+    { value: '', label: 'Global and this project' },
+    { value: 'global', label: 'Global only' },
+    { value: 'projects', label: 'Global and every project' },
+  ];
+
+  async function loadHealth() {
+    state.healthLoading = true;
+    state.healthError = null;
+    if (state.scope === 'health') render();
+    try {
+      state.health = await api(`/api/health${state.healthScope ? `?scope=${state.healthScope}` : ''}`);
+    } catch (e) {
+      state.healthError = e.message;
+    } finally {
+      state.healthLoading = false;
+      render();
+    }
+  }
+
+  const findingWhere = (f) => (f.scope === 'global' ? 'Global' : f.project ? (state.data.project && f.project.root === state.data.project.root ? 'This project' : f.project.name) : 'Projects');
+
+  /** What a fix does, said before the preview. Destructive ones use the danger button. */
+  function fixLead(f, fx) {
+    const r = fx.request;
+    if (r.action === 'delete') return { danger: true, lead: `${f.name} will be removed from ${findingWhere(f).toLowerCase()}: real folders go to the system Trash, links are only removed. To get it back, restore it from the Trash by hand.` };
+    if (r.action === 'normalize') return r.keep
+      ? { danger: true, lead: `Keeps the ${r.keep} copy of ${f.name}; the other copy goes to the system Trash and is replaced by a link.` }
+      : { lead: `Makes the agents folder of ${f.name} canonical and links it for Claude.` };
+    if (r.action === 'activate') return { lead: `Moves ${f.name} out of skills-inactive so agents can use it again.` };
+    if (r.action === 'promote') return { danger: true, lead: `Copies the local ${f.name} over the global one. The old global copy goes to the system Trash.` };
+    return { lead: '' };
+  }
+
+  async function fixFinding(f, fx) {
+    if (fx.request.action === 'refresh') {
+      await refreshFromGlobal([f.name], f.project && fx.request.projectRoot ? f.project : null);
+      return;
+    }
+    const { lead, danger } = fixLead(f, fx);
+    const ok = await confirmDialog({
+      title: `${fx.label}: ${f.name}`,
+      lead,
+      confirmLabel: fx.label,
+      danger: !!danger,
+      preview: async () => previewOf(await safeDry(fx.request)),
+    });
+    if (ok) await perform(null, fx.request, { busyKey: f.id });
+  }
+
+  function findingRow(f) {
+    const busy = state.busy.has(f.id);
+    return h('li', { class: `rep finding ${f.severity}${busy ? ' busy' : ''}` },
+      h('div', { class: 'rep-main' },
+        h('span', { class: 'pname', text: f.name }),
+        h('div', { class: 'badges' },
+          h('span', { class: `badge ${f.severity === 'error' ? 'bad' : 'warn'}`, text: (FINDING[f.type] || { label: f.type }).label }),
+          h('span', { class: 'badge also', text: findingWhere(f) })),
+        h('p', { class: 'finding-msg', text: f.message }),
+        f.paths.length ? h('div', { class: 'paths' }, f.paths.map((p) => h('span', { class: `path${f.type === 'broken-link' || (f.type === 'missing-source' && f.kind === 'link') ? ' broken' : ''}`, title: p }, h('span', { text: shortPath(p) })))) : null,
+        f.manual ? h('p', { class: 'meta', text: f.fixes.length ? `Or by hand: ${f.manual.replace(/^or /, '')}` : `Fix by hand: ${f.manual}` }) : null),
+      f.fixes.length
+        ? h('div', { class: 'actions' }, f.fixes.map((fx, i) => h('button', {
+          class: `btn small${i === 0 ? ' primary' : ''}`, type: 'button', 'data-fk': `hf:${f.id}:${i}`, text: fx.label,
+          'aria-label': `${fx.label}: ${f.name} (${findingWhere(f)})`, disabled: busy ? true : null, onclick: () => fixFinding(f, fx),
+        })))
+        : null);
+  }
+
+  function renderHealth(list) {
+    if (state.healthError && !state.health) {
+      list.append(h('div', { class: 'empty-state' },
+        h('h2', { text: 'Could not run the check' }), h('p', { text: state.healthError }),
+        h('p', {}, h('button', { class: 'btn', type: 'button', text: 'Try again', onclick: loadHealth }))));
+      return;
+    }
+    if (!state.health) {
+      list.append(h('div', { class: 'empty-state' }, h('h2', { text: 'Checking' }),
+        h('p', {}, h('span', { class: 'spinner', 'aria-hidden': 'true' }), ' Looking for broken links, missing sources, forgotten inactive folders and diverged copies.')));
+      return;
+    }
+    const hr = state.health;
+    const q = state.q.trim().toLowerCase();
+    const shown = hr.findings.filter((f) => !q || f.name.toLowerCase().includes(q) || f.message.toLowerCase().includes(q) || (f.project && f.project.name.toLowerCase().includes(q)));
+    const scopeSel = h('select', { id: 'health-scope', 'data-fk': 'health-scope', onchange: (e) => { state.healthScope = e.target.value; loadHealth(); } },
+      HEALTH_SCOPES.map((o) => h('option', { value: o.value, text: o.value === '' && !state.data.project ? 'Global (no project here)' : o.label, selected: o.value === state.healthScope ? true : null })));
+    const where = [hr.checked.global ? 'global' : null, ...hr.checked.projects.map((p) => p.name)].filter(Boolean).join(', ');
+    const { error, hint } = hr.counts;
+    const section = (sev, title, note) => {
+      const items = shown.filter((f) => f.severity === sev);
+      if (!items.length) return null;
+      return h('section', { class: 'panel', 'aria-label': title },
+        h('div', { class: 'panel-head' }, h('h2', { class: 'section-label', text: `${title} (${items.length})` })),
+        h('p', { class: 'meta', text: note }),
+        h('ul', { class: 'reps findings' }, items.map(findingRow)));
+    };
+    list.append(h('div', { class: 'pview' },
+      h('section', { class: 'panel', 'aria-label': 'Health check' },
+        h('div', { class: 'panel-head' },
+          h('h2', { class: 'section-label', text: 'Health check' }),
+          h('div', { class: 'actions health-controls' },
+            h('label', { class: 'sr', for: 'health-scope', text: 'What to check' }), scopeSel,
+            h('button', { class: 'btn small', type: 'button', 'data-fk': 'health-again', disabled: state.healthLoading ? true : null, text: state.healthLoading ? 'Checking' : 'Check again', onclick: loadHealth }))),
+        h('p', { class: 'meta', role: 'status' }, state.healthLoading ? h('span', { class: 'spinner', 'aria-hidden': 'true' }) : null,
+          !hr.findings.length ? `No problems found in ${where}.` : `${error} ${error === 1 ? 'error' : 'errors'} and ${hint} ${hint === 1 ? 'hint' : 'hints'} in ${where}.`),
+        h('p', { class: 'meta', text: 'Every fix shows what would change before it runs. Deleted folders go to the system Trash.' })),
+      hr.findings.length && !shown.length ? emptyState('No matching findings', 'Try a different search.') : null,
+      section('error', 'Errors', 'Agents see these skills but cannot load them, or links point at nothing.'),
+      section('hint', 'Hints', 'Advisory: inactive folders that look forgotten, and skills with the same name but different content.')));
+  }
+
   // ---------- wiring ----------
 
   function setScope(scope) {
@@ -2027,6 +2156,7 @@
     render();
     if (scope === 'projects' && !state.projects && !state.projectsLoading) loadProjects();
     if (scope === 'profiles' && !state.profiles) loadProfiles();
+    if (scope === 'health' && !state.health && !state.healthLoading) loadHealth();
   }
 
   document.querySelectorAll('.tab').forEach((tab) => {
