@@ -56,6 +56,14 @@ An ignored folder is not scanned at all, unlike archived. If a project is missin
 | `skm refresh <name...>` | replace a project's copy of a skill with the global one (inactive global too); old copy to the Trash |
 | `skm promote <name>` | copy a project skill to the global store |
 | `skm activate\|deactivate <name>` | switch a skill on or off |
+| `skm profile list\|show <name>` | named skill kits (profiles) and where each skill comes from |
+| `skm profile apply <name> --dry-run` | preview copying a profile's skills into the current project |
+| `skm profile apply <name>` | copy them: skips skills already there, reports names missing from global |
+| `skm profile save <name> [skill...]` | save a list of skills, or with none the current project's active skills |
+
+When the user starts a new project or asks to set it up "like" another one, run `skm profile list` and suggest a
+matching profile; apply it from inside the project, with `--dry-run` first. `--overwrite` replaces existing project
+skills (old copies go to the system Trash): only with the user's agreement.
 
 Add `--json` for structured output. Commands that delete or replace ask for confirmation; do not pass `--yes` unless
 the user agreed.

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { isHomeRelative, isPathLike } from '../src/core/pathkind.mjs';
-import { assertSkillsExist, checkUpdates, configPath, describeProject, diffLocal, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, projectDescription, projectStatus, readConfig, resolveContext, runAction, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
+import { assertSkillsExist, checkUpdates, configPath, deleteProfile, describeProject, diffLocal, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, profilesPath, projectDescription, projectStatus, readConfig, readProfiles, getProfile, resolveContext, runAction, saveProfile, saveProjectProfile, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -33,9 +33,25 @@ const USAGE = `skm: skills manager
   skm projects ignore <name|path|glob...>   hide folders from the scan (a glob like "*-backup" or "android" matches folder names)
   skm projects unignore <entry|name|path...>   |   skm projects ignored [--json]   list entries and how many folders each hides
   skm projects add|rm <path>   |   skm projects depth <n>   |   skm config
+  skm profile list|show|save|apply|rm   named skill kits (skm profile --help)
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
 Env: SKM_HOME overrides the home directory.`;
+
+const PROFILE_USAGE = `skm profile: named lists of skills (kits) to set up a project in one step
+
+  skm profile list [--json]          every profile with its skills
+  skm profile show <name> [--json]   members, and whether each one is in global (active or inactive) and in this project
+  skm profile save <name> [skill...] [--overwrite]
+                                     store the given skills, or with none the current project's active skills
+  skm profile apply <name> [--overwrite] [--target agents|claude] [--dry-run] [--yes]
+                                     copy every skill of the profile into the current project; skills already
+                                     there are skipped (--overwrite replaces them, old copies go to the system Trash),
+                                     names missing from global are reported; inactive global skills are copied but
+                                     stay inactive in global
+  skm profile rm <name>              delete the profile (skill folders are not touched)
+
+Profiles are stored in ~/.config/skm/profiles.json.`;
 
 const FLAGS_WITH_VALUE = new Set(['--keep', '--port', '--target', '--tag', '--desc', '--tags', '--add-tag', '--rm-tag', '--status', '--note', '--clear']);
 
@@ -425,11 +441,92 @@ async function projectsCommand(opts, [sub, arg, ...more], flags) {
   }
 }
 
+// ---- profiles ------------------------------------------------------------
+
+const APPLY_PAINT = { copied: c.green, skipped: c.dim, missing: c.yellow, failed: c.red };
+
+function printApply(result) {
+  console.log(result.message);
+  for (const ch of result.changes) console.log(`  ${ch}`);
+  for (const r of result.results) {
+    const why = r.status === 'skipped' ? r.reason : r.status === 'missing' ? 'not in global' : r.status === 'failed' ? `${r.error} [${r.code}]` : `.${r.target}/skills`;
+    console.log(`  ${APPLY_PAINT[r.status](r.status.padEnd(7))} ${r.name}  ${c.dim(why)}`);
+  }
+  if (!result.ok) process.exitCode = 1;
+}
+
+/** Where each member of a profile comes from: global active / inactive / missing, and whether the project has it. */
+function profileMembers(state, p) {
+  return p.skills.map((name) => {
+    const g = state.global.find((s) => s.name === name);
+    const l = state.local.find((s) => s.name === name);
+    return { name, global: g ? (g.active ? 'active' : 'inactive') : 'missing', local: state.project ? (l ? (l.active ? 'active' : 'inactive') : 'no') : null };
+  });
+}
+
+async function profileCommand(opts, state, [sub = 'list', name, ...rest], flags) {
+  if (flags.help || flags.h) return console.log(PROFILE_USAGE);
+  const need = () => {
+    if (!name) throw new SkmError('invalid', `usage: skm profile ${sub} <name>`);
+    return name;
+  };
+  switch (sub) {
+    case 'list':
+    case 'ls': {
+      const profiles = readProfiles(opts);
+      if (flags.json) return console.log(JSON.stringify(profiles, null, 2));
+      if (!profiles.length) return console.log('no profiles yet: save one with `skm profile save <name> [skill...]`');
+      return console.log(table([['PROFILE', 'SKILLS', 'MEMBERS'].map((h) => c.bold(h)), ...profiles.map((p) => [p.name, String(p.skills.length), clip(p.skills.join(', '), 80)])]));
+    }
+    case 'show': {
+      const p = getProfile(opts, need());
+      const members = profileMembers(state, p);
+      if (flags.json) return console.log(JSON.stringify({ ...p, members }, null, 2));
+      const GLOBAL = { active: (x) => x, inactive: c.dim, missing: c.yellow };
+      const rows = [['SKILL', 'GLOBAL', ...(state.project ? [`IN ${state.project.name.toUpperCase()}`] : [])].map((h) => c.bold(h))];
+      for (const m of members) rows.push([m.name, GLOBAL[m.global](m.global === 'missing' ? 'missing' : m.global), ...(state.project ? [m.local === 'no' ? c.dim('no') : m.local] : [])]);
+      console.log(c.bold(p.name));
+      console.log(table(rows));
+      if (members.some((m) => m.global === 'missing')) console.log(c.dim('\nmissing skills are reported, not copied, when the profile is applied'));
+      return;
+    }
+    case 'save': {
+      const overwrite = Boolean(flags.overwrite);
+      const p = rest.length ? saveProfile(opts, { name: need(), skills: rest, overwrite }) : saveProjectProfile(opts, { name: need(), overwrite });
+      if (flags.json) return console.log(JSON.stringify({ ok: true, profile: p }, null, 2));
+      console.log(`saved profile ${p.name}: ${p.skills.join(', ')}`);
+      return console.log(c.dim(profilesPath(resolveContext(opts).home)));
+    }
+    case 'apply': {
+      const req = { action: 'applyProfile', profile: need(), overwrite: Boolean(flags.overwrite), target: flags.target };
+      const dryRun = Boolean(flags['dry-run']);
+      if (req.overwrite && !dryRun) {
+        const plan = runAction(opts, { ...req, dryRun: true });
+        for (const ch of plan.changes) console.log(`  ${ch}`);
+        const question = `apply ${req.profile} with --overwrite? Skills already in the project are replaced; the old copies go to the system Trash.\nContinue?`;
+        if (!(await confirm(question, flags))) return console.log('aborted');
+      }
+      const result = runAction(opts, { ...req, dryRun });
+      return flags.json ? report(result, flags) : printApply(result);
+    }
+    case 'rm':
+    case 'delete': {
+      const p = deleteProfile(opts, need());
+      if (flags.json) return console.log(JSON.stringify({ ok: true, profile: p }, null, 2));
+      console.log(`deleted profile ${p.name}`);
+      return console.log(c.dim(`recreate with: skm profile save ${p.name} ${p.skills.join(' ')}`));
+    }
+    default:
+      throw new SkmError('invalid', `unknown profile subcommand: ${sub}\n\n${PROFILE_USAGE}`);
+  }
+}
+
 // ---- commands ------------------------------------------------------------
 
 async function main(argv, opts = {}) {
   const { _: pos, flags } = parseArgs(argv);
   const [cmd, name] = pos;
+  if (cmd === 'profile' && (flags.help || flags.h)) return console.log(PROFILE_USAGE);
   if (flags.help || flags.h || cmd === 'help') return console.log(USAGE);
 
   if (!cmd || cmd === 'ui') {
@@ -625,6 +722,10 @@ async function main(argv, opts = {}) {
 
     case 'projects':
       return projectsCommand(opts, pos.slice(1), flags);
+
+    case 'profile':
+    case 'profiles':
+      return profileCommand(opts, state, pos.slice(1), flags);
 
     case 'config': {
       const file = configPath(resolveContext(opts).home);

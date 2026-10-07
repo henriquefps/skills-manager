@@ -73,9 +73,8 @@ export function validateConfig(input, opts = {}) {
   return { projectRoots: roots, scanDepth: depth };
 }
 
-/** Persist `next` (temp file + rename; the directory is created on first write). */
-function writeRaw(home, next) {
-  const file = configPath(home);
+/** Write JSON atomically (temp file + rename; the directory is created on first write). */
+export function writeJsonFile(file, next) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   try {
@@ -86,6 +85,9 @@ function writeRaw(home, next) {
     throw err;
   }
 }
+
+/** Persist `next` as the config file. */
+const writeRaw = (home, next) => writeJsonFile(configPath(home), next);
 
 /** Read-modify-write of the raw file: `mutate(raw)` returns the next object; every key it keeps survives. */
 export function updateRaw(opts, mutate) {

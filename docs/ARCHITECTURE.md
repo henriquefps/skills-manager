@@ -67,6 +67,7 @@ replacing the claude copy with the symlink; `diverged` is never auto-resolved: n
 | `copyToLocal` | global -> local | **copy** to `<root>/.claude/skills/<name>` (or `.agents/skills` via `target: "agents"`); fails if exists unless `overwrite` |
 | `refresh` | global -> local | replace each real local folder that differs from the global copy (active or inactive, only read) with that copy; old folder to the system Trash. See below |
 | `delete` | global/local | move real folders to the system Trash, unlink symlinks (global also removes claude symlink) |
+| `applyProfile` | global -> local | copy every skill of a profile into the project; see "Profiles (skill kits)" |
 
 Every action takes `dryRun: true` and returns the planned `changes` without touching disk.
 
@@ -453,3 +454,59 @@ Absent when empty; every other key is preserved on write.
   when something was pruned. `show` / `find` on an ignored path say it is ignored and print the `unignore` command.
 - UI: an Ignore button on each project card (toast with Undo), and a collapsed `Hidden (N)` section at the bottom of the Projects
   tab listing each entry with kind, hidden count and a Remove button, plus a form to add a path or glob (errors inline).
+
+## Profiles (skill kits)
+
+A profile is a named list of skill names (no versions, no hashes), used to set up a project in one step.
+Core: `src/core/profiles.mjs` (storage) and the `applyProfile` action in `src/core/actions.mjs`.
+
+Storage: `<home>/.config/skm/profiles.json`, separate from `config.json` so it is easy to share, created on first
+write, written atomically (`writeJsonFile` in `config.mjs`), every unknown key preserved (top level and per profile):
+```json
+{ "profiles": { "capacitor-react-shadcn": { "skills": ["capacitor-app-checklist", "cordova-plugins", "shadcn-ui"] } } }
+```
+Profile names: trimmed, lowercased, `^[a-z0-9][a-z0-9-]{0,47}$`. Skills: valid skill names (`assertName`), at least 1,
+at most 200, de-duplicated and stored sorted. Names do not have to exist on disk (a shared profile may name skills
+this machine lacks). A missing or invalid file means no profiles; malformed entries are dropped on read. A profile left
+with no skills is refused; when the last profile is removed the `profiles` key is dropped.
+
+Core API: `readProfiles`, `getProfile` (`not-found`), `saveProfile({ name, skills, overwrite })` (`exists` unless
+`overwrite`), `updateProfile({ name, rename?, skills? | addSkills?, removeSkills? })` (rename onto an existing name is
+`exists`), `deleteProfile(name)` (returns the removed profile; never touches skill folders),
+`saveProjectProfile({ name, overwrite })` (the project's **active** local skills; `no-project`, or `invalid` when there
+are none).
+
+`applyProfile` (`POST /api/action` `{ "action": "applyProfile", "profile": "...", "target": "claude|agents",
+"overwrite": false, "dryRun": false, "projectRoot"? }`): for each member, in profile order,
+- a skill only **inactive** in the project is skipped (`reason: "inactive in this project"`), with or without overwrite;
+- a skill already active in the project is skipped (`reason: "already in this project"`) unless `overwrite`, which
+  replaces the real folder where it lives (the target root if it has one, else the other root), the old copy going to
+  the system Trash; a symlink in the other root is left as it is;
+- everything else goes through `copyManyToLocal` (grouped by root), so inactive global skills are valid sources, are
+  copied as active project folders, and stay inactive in global. `not-found` there becomes `status: "missing"`.
+
+Result: `{ ok, message, changes, results: [{ name, status: "copied"|"skipped"|"missing"|"failed", target?, reason?,
+error?, code? }], copied, skipped, missing, failed }`. `ok` is false only when something `failed` (missing names are a
+report, not a failure). `dryRun` plans and touches nothing.
+
+HTTP: `GET /api/profiles` -> `{ "file": "/abs/.config/skm/profiles.json", "profiles": [{ "name", "skills" }] }`.
+`POST /api/profiles` (same-origin guard) body `{ "op": "create"|"update"|"delete"|"saveProject", ... }` with the core
+arguments above (`saveProject` takes an optional `projectRoot`, checked like `/api/action`) -> `{ ok, profile, profiles }`;
+errors as JSON (`invalid`, `exists` 409, `not-found` 404, `forbidden` 403, `no-project`).
+
+CLI:
+```
+skm profile list [--json]                 (bare `skm profile` lists too)
+skm profile show <name> [--json]          members, global active/inactive/missing, and whether the project has each
+skm profile save <name> [skill...] [--overwrite]    no skills = the current project's active skills
+skm profile apply <name> [--overwrite] [--target agents|claude] [--dry-run] [--yes]
+skm profile rm <name>                     prints the `skm profile save` line that recreates it
+skm profile --help
+```
+`apply --overwrite` prints the plan and asks for confirmation (TTY; `--yes` skips it); exit 1 if any item failed.
+
+UI: a **Profiles** tab (cards with members marked missing / inactive in global / already in the current project;
+create, rename and edit members in a drawer, delete with Undo, "Save <project> as a profile"), **Apply to <project>** on
+each profile card for the current project, and **Apply profile** / **Save as profile** on every project card in the
+Projects tab. Apply opens the confirm dialog with a dry-run preview (target, overwrite) and ends with a per-skill
+results dialog.
