@@ -82,6 +82,8 @@
     ptags: new Set(), // project tag filter (Projects tab), AND semantics
     onlyWithSkills: false, // Projects tab: hide projects that have no skills yet
     showArchived: false, // Projects tab: archived projects are hidden until asked for
+    profiles: null, // GET /api/profiles payload, loaded when the Profiles tab (or an Apply profile dialog) first needs it
+    profilesError: null,
   };
 
   const TAG_RE = /^[a-z0-9-]{1,24}$/;
@@ -94,7 +96,8 @@
     archived: { label: 'Archived', tone: 'plain' },
   };
 
-  const SCOPES = ['global', 'local', 'projects'];
+  const SCOPES = ['global', 'local', 'projects', 'profiles'];
+  const PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
   const SEVERITY = { error: { label: 'error', one: 'error', many: 'errors', tone: 'bad' }, warn: { label: 'warn', one: 'warning', many: 'warnings', tone: 'warn' }, info: { label: 'info', one: 'note', many: 'notes', tone: 'info' } };
   const SEV_ORDER = ['error', 'warn', 'info'];
 
@@ -204,6 +207,7 @@
       state.loadError = e.message;
     }
     render();
+    if (state.profiles) await loadProfiles();
     if (state.projects) await loadProjects();
   }
 
@@ -335,7 +339,7 @@
 
   function renderBanner() {
     const el = $('#banner');
-    if (!state.data || state.scope === 'projects') { el.hidden = true; return; }
+    if (!state.data || state.scope === 'projects' || state.scope === 'profiles') { el.hidden = true; return; }
     const bad = problems(skillsOf('global'));
     const localBad = problems(skillsOf('local'));
     const fixable = fixAllTargets();
@@ -371,21 +375,25 @@
     const pc = $('#count-projects');
     pc.hidden = !state.projects;
     pc.textContent = state.projects ? state.projects.projects.length : 0;
+    const fc = $('#count-profiles');
+    fc.hidden = !state.profiles;
+    fc.textContent = state.profiles ? state.profiles.profiles.length : 0;
     const proj = state.scope === 'projects';
-    $('#chips').hidden = false;
-    $('#sort-box').hidden = proj;
+    const prof = state.scope === 'profiles';
+    $('#chips').hidden = prof;
+    $('#sort-box').hidden = proj || prof;
     $('#sort').value = state.sort;
-    $('.toolbar').classList.toggle('no-sort', proj);
+    $('.toolbar').classList.toggle('no-sort', proj || prof);
     for (const tab of document.querySelectorAll('.tab')) {
       const on = tab.dataset.scope === state.scope;
       tab.setAttribute('aria-selected', String(on));
       tab.tabIndex = on ? 0 : -1;
     }
     $('#list').setAttribute('aria-labelledby', `tab-${state.scope}`);
-    $('#search').placeholder = proj ? 'Search projects' : 'Search skills';
+    $('#search').placeholder = proj ? 'Search projects' : prof ? 'Search profiles' : 'Search skills';
     $('label[for="search"]').textContent = proj
       ? 'Search projects by name, tag, description, stack, notes, README or remote'
-      : 'Search skills by name, description or tag';
+      : prof ? 'Search profiles by name or skill' : 'Search skills by name, description or tag';
   }
 
   function chipDefs(skills) {
@@ -446,6 +454,7 @@
   function renderChips() {
     const box = $('#chips');
     if (state.scope === 'projects') { renderProjectChips(box); return; }
+    if (state.scope === 'profiles') { box.replaceChildren(); return; }
     box.setAttribute('aria-label', 'Filter by status');
     const defs = chipDefs(skillsOf(state.scope));
     const cur = defs.find((c) => c.id === state.filter);
@@ -472,7 +481,7 @@
     const noun = proj ? 'projects' : 'skills';
     if (proj ? state.projects : state.data) for (const t of [...sel]) if (!tags.some((x) => x.tag === t)) sel.delete(t);
     $('#tag-suggest').replaceChildren(...tagList().map((t) => h('option', { value: t.tag })));
-    box.hidden = !state.data || !tags.length;
+    box.hidden = !state.data || !tags.length || state.scope === 'profiles';
     if (box.hidden) return;
     box.replaceChildren(...[
       h('span', { class: 'tagbar-label', id: 'tagbar-label', text: proj ? 'Project tags' : 'Tags' }),
@@ -512,6 +521,7 @@
       return;
     }
     if (state.scope === 'projects') { renderProjects(list); return; }
+    if (state.scope === 'profiles') { renderProfiles(list); return; }
     if (state.scope === 'local' && !state.data.project) {
       list.append(emptyState('No project here',
         'Local skills live inside a project folder. Run skm from a folder that has .git, .agents or .claude to manage them.'));
@@ -1383,6 +1393,8 @@
         h('div', { class: 'actions' },
           h('button', { class: 'btn small', type: 'button', 'data-fk': `pe:${p.root}`, 'aria-label': `Edit ${p.name}`, text: 'Edit', onclick: () => openProjectEditor(p) }),
           h('button', { class: 'btn small', type: 'button', text: 'Copy from global', onclick: () => copyFromGlobal(p) }),
+          h('button', { class: 'btn small', type: 'button', 'data-fk': `pa:${p.root}`, 'aria-label': `Apply a profile to ${p.name}`, text: 'Apply profile', onclick: () => applyProfile({ root: p.root, name: p.name, skills: p.skills }) }),
+          active.length ? h('button', { class: 'btn small', type: 'button', 'aria-label': `Save the active skills of ${p.name} as a profile`, text: 'Save as profile', onclick: () => openProfileEditor(null, { name: p.name, skills: active.map((k) => k.name) }) }) : null,
           h('button', { class: 'btn small', type: 'button', 'data-fk': `pi:${p.root}`, 'aria-label': `Ignore ${p.name}`, title: 'Hide this project from the index', text: 'Ignore', onclick: () => ignoreProject(p) }))));
   }
 
@@ -1585,6 +1597,274 @@
     await perform(null, { ...base, projectRoot: root, overwrite: !!values.overwrite }, { busyKey: pkey(root, r.name) });
   }
 
+  // ---------- profiles (skill kits) ----------
+
+  async function loadProfiles() {
+    try {
+      state.profiles = await api('/api/profiles');
+      state.profilesError = null;
+    } catch (e) {
+      state.profilesError = e.message;
+    }
+    render();
+  }
+
+  /** POST /api/profiles; resolves to the response, or null after showing the error (into `errEl` when given). */
+  async function profileOp(body, errEl) {
+    try {
+      const res = await api('/api/profiles', body);
+      state.profiles = { ...(state.profiles || {}), profiles: res.profiles };
+      return res;
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.message; errEl.hidden = false; } else toast(e.message, 'error');
+      return null;
+    }
+  }
+
+  const globalSkill = (name) => skillsOf('global').find((g) => g.name === name);
+  const localSkill = (name) => skillsOf('local').find((l) => l.name === name);
+  const profileSlug = (s) => s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+
+  function memberChip(name) {
+    const g = globalSkill(name);
+    const here = state.data.project && localSkill(name);
+    const notes = [!g ? 'Not in global: reported as missing when the profile is applied.' : g.active ? 'Active in global.' : 'Inactive in global: copied into the project, stays inactive in global.'];
+    if (here) notes.push(`Already in ${state.data.project.name}.`);
+    return h('li', { class: `mchip${!g ? ' missing' : g.active ? '' : ' inactive'}`, title: notes.join(' ') },
+      name,
+      !g ? h('span', { class: 'sr', text: ' (missing from global)' }) : !g.active ? h('span', { class: 'sr', text: ' (inactive in global)' }) : null,
+      here ? h('span', { class: 'mhere', 'aria-label': `already in ${state.data.project.name}`, text: '✓' }) : null);
+  }
+
+  function profileCard(p) {
+    const proj = state.data.project;
+    const missing = p.skills.filter((n) => !globalSkill(n)).length;
+    const inactive = p.skills.filter((n) => { const g = globalSkill(n); return g && !g.active; }).length;
+    const here = proj ? p.skills.filter(localSkill).length : 0;
+    return h('article', { class: 'card profile', 'aria-labelledby': `fn-${p.name}` },
+      h('div', { class: 'card-top' },
+        h('div', { class: 'card-id' },
+          h('h3', { class: 'name', id: `fn-${p.name}`, text: p.name }),
+          h('div', { class: 'badges' },
+            h('span', { class: 'badge plain', text: `${p.skills.length} ${p.skills.length === 1 ? 'skill' : 'skills'}` }),
+            missing ? h('span', { class: 'badge warn', title: 'These names have no global skill. Applying the profile reports them and copies the rest.', text: `${missing} missing from global` }) : null,
+            inactive ? h('span', { class: 'badge also', title: 'Inactive global skills are copied into the project and stay inactive in global.', text: `${inactive} inactive in global` }) : null,
+            here ? h('span', { class: 'badge also', text: here === p.skills.length ? `All in ${proj.name}` : `${here} already in ${proj.name}` }) : null))),
+      h('ul', { class: 'pmembers', 'aria-label': `Skills in ${p.name}` }, p.skills.map(memberChip)),
+      h('div', { class: 'card-foot' },
+        h('span', { class: 'meta', text: 'Copy every skill into a project in one step.' }),
+        h('div', { class: 'actions' },
+          proj ? h('button', { class: 'btn small primary', type: 'button', 'data-fk': `fa:${p.name}`, text: `Apply to ${proj.name}`, onclick: () => applyProfile({ name: proj.name }, p.name) }) : null,
+          h('button', { class: 'btn small', type: 'button', 'data-fk': `fe:${p.name}`, 'aria-label': `Edit ${p.name}`, text: 'Edit', onclick: () => openProfileEditor(p) }),
+          h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Delete ${p.name}`, text: 'Delete', onclick: () => removeProfile(p) }))));
+  }
+
+  function renderProfiles(list) {
+    if (state.profilesError && !state.profiles) {
+      list.append(h('div', { class: 'empty-state' },
+        h('h2', { text: 'Could not load profiles' }), h('p', { text: state.profilesError }),
+        h('p', {}, h('button', { class: 'btn', type: 'button', text: 'Try again', onclick: loadProfiles }))));
+      return;
+    }
+    if (!state.profiles) {
+      list.append(emptyState('Loading', 'Reading your profiles.'));
+      return;
+    }
+    const all = state.profiles.profiles;
+    const q = state.q.trim().toLowerCase();
+    const shown = all.filter((p) => !q || p.name.includes(q) || p.skills.some((n) => n.toLowerCase().includes(q)));
+    const proj = state.data.project;
+    const activeHere = skillsOf('local').filter((s) => s.active).map((s) => s.name);
+    const saveHere = proj && activeHere.length
+      ? h('button', { class: 'btn small', type: 'button', 'data-fk': 'profile-save-here', text: `Save ${proj.name} as a profile`, onclick: () => openProfileEditor(null, { name: proj.name, skills: activeHere }) })
+      : null;
+    list.append(h('div', { class: 'pview' },
+      h('section', { class: 'panel profiles-head', 'aria-label': 'About profiles' },
+        h('div', { class: 'panel-head' },
+          h('h2', { class: 'section-label', text: `Profiles (${shown.length === all.length ? all.length : `${shown.length} of ${all.length}`})` }),
+          h('div', { class: 'actions' }, saveHere,
+            h('button', { class: 'btn small primary', type: 'button', 'data-fk': 'profile-new', text: 'New profile', onclick: () => openProfileEditor(null) }))),
+        h('p', { class: 'meta', text: 'A profile is a named list of skills. Applying it copies every skill into a project: skills already there are skipped unless you choose to overwrite, and names missing from global are reported. Inactive global skills are copied and stay inactive in global.' }),
+        state.profiles.file ? h('p', { class: 'meta mono', title: state.profiles.file, text: `Stored in ${shortPath(state.profiles.file)}` }) : null),
+      !all.length
+        ? emptyState('No profiles yet', 'Create one from a list of skills, or save the active skills of a project as a profile.')
+        : shown.length
+          ? h('div', { class: 'pgrid' }, shown.map(profileCard))
+          : emptyState('No matching profiles', 'Try a different search.')));
+  }
+
+  /** Create (p null, optional `prefill` { name, skills }) or edit a profile: name and members. */
+  function openProfileEditor(p, prefill = {}) {
+    if (!state.profiles) loadProfiles();
+    const dlg = $('#drawer');
+    const creating = !p;
+    const draft = { skills: [...(p ? p.skills : prefill.skills || [])].sort() };
+    const id = (n) => `pf-${n}`;
+    const nameInput = h('input', {
+      type: 'text', class: 'text-input', id: id('name'), name: 'name', maxlength: '48', autocomplete: 'off', spellcheck: 'false',
+      placeholder: 'capacitor-react-shadcn', 'aria-describedby': `${id('name')}-hint`,
+    });
+    nameInput.value = p ? p.name : profileSlug(prefill.name || '');
+
+    const names = [...new Set([...skillsOf('global'), ...skillsOf('local')].map((s) => s.name))].sort();
+    const suggest = h('datalist', { id: id('suggest') }, names.map((n) => h('option', { value: n })));
+    const chips = h('div', { class: 'tags' });
+    const skErr = h('p', { class: 'tag-err', id: id('sk-err'), role: 'alert', hidden: true });
+    const skInput = h('input', {
+      type: 'text', class: 'tag-input', id: id('skill'), name: 'skill', list: suggest.id, placeholder: 'Add skill', autocomplete: 'off', spellcheck: 'false',
+      'aria-label': 'Add a skill to the profile', 'aria-describedby': skErr.id,
+    });
+    const showSkErr = (msg) => { skErr.textContent = msg || ''; skErr.hidden = !msg; skInput.toggleAttribute('aria-invalid', !!msg); };
+    const draw = () => chips.replaceChildren(
+      ...draft.skills.map((n) => h('span', { class: `tag${globalSkill(n) ? '' : ' missing'}`, title: globalSkill(n) ? null : 'Not in global: reported as missing when the profile is applied.' },
+        h('span', { class: 'tag-name static', text: n }),
+        h('button', {
+          class: 'tag-x', type: 'button', 'aria-label': `Remove ${n}`, title: `Remove ${n}`,
+          onclick: () => { draft.skills = draft.skills.filter((x) => x !== n); showSkErr(''); draw(); skInput.focus(); },
+        }, xIcon()))),
+      h('span', { class: 'tag-add' }, skInput));
+    const addSkill = () => {
+      const v = skInput.value.trim();
+      if (!v) { showSkErr('Type a skill name first.'); return; }
+      if (v.startsWith('.') || /[\\/]/.test(v)) { showSkErr('That is not a skill name.'); return; }
+      if (draft.skills.includes(v)) { showSkErr(`${v} is already in the profile.`); return; }
+      draft.skills = [...draft.skills, v].sort();
+      skInput.value = '';
+      showSkErr('');
+      draw();
+      $(`#${id('skill')}`).focus();
+    };
+    skInput.addEventListener('input', () => showSkErr(''));
+    skInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addSkill(); } });
+    draw();
+
+    const formErr = h('p', { class: 'form-err', role: 'alert', hidden: true });
+    const saveBtn = h('button', { class: 'btn primary', type: 'submit', text: creating ? 'Create' : 'Save' });
+    const closeBtn = h('button', { class: 'btn small ghost', type: 'button', text: 'Close', onclick: () => dlg.close() });
+    const fail = (msg, focus) => { formErr.textContent = msg; formErr.hidden = false; if (focus) focus.focus(); };
+    const form = h('form', {
+      class: 'drawer-body pedit', novalidate: true,
+      onsubmit: async (e) => {
+        e.preventDefault();
+        formErr.hidden = true;
+        const name = nameInput.value.trim().toLowerCase();
+        if (!PROFILE_RE.test(name)) { fail('Use 1 to 48 characters for the name: lowercase letters, digits and hyphens, not starting with a hyphen.', nameInput); return; }
+        if (skInput.value.trim()) addSkill();
+        if (!draft.skills.length) { fail('Add at least one skill.', skInput); return; }
+        saveBtn.disabled = true;
+        const body = creating
+          ? { op: 'create', name, skills: draft.skills }
+          : { op: 'update', name: p.name, skills: draft.skills, ...(name !== p.name ? { rename: name } : {}) };
+        if (!(await profileOp(body, formErr))) { saveBtn.disabled = false; return; }
+        dlg.close();
+        toast(creating ? `Created profile ${name}.` : `Saved profile ${name}.`);
+        render();
+      },
+    },
+      h('div', { class: 'field' },
+        h('div', { class: 'field-head' }, h('label', { for: id('name'), text: 'Name' })),
+        h('p', { class: 'field-hint', id: `${id('name')}-hint`, text: 'Lowercase letters, digits and hyphens, up to 48 characters.' }),
+        nameInput),
+      h('div', { class: 'field' },
+        h('div', { class: 'field-head' }, h('span', { class: 'field-label', id: id('skills-l'), text: 'Skills' })),
+        h('p', { class: 'field-hint', text: 'Type a skill name and press Enter. Any global skill works, active or inactive. A name that is not in global is kept and reported as missing when the profile is applied.' }),
+        h('div', { class: 'tagsblock', role: 'group', 'aria-labelledby': id('skills-l') }, chips, skErr, suggest)),
+      formErr,
+      h('div', { class: 'modal-actions' }, h('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: () => dlg.close() }), saveBtn));
+
+    dlg.replaceChildren(h('div', { class: 'drawer-inner' },
+      h('div', { class: 'drawer-head' },
+        h('div', {}, h('div', { class: 'badges' }, h('span', { class: 'badge plain', text: 'Profile' })),
+          h('h2', { id: 'drawer-title', text: creating ? 'New profile' : `Edit ${p.name}` })),
+        closeBtn),
+      form));
+    if (!dlg.open) dlg.showModal();
+    (nameInput.value ? skInput : nameInput).focus();
+  }
+
+  async function removeProfile(p) {
+    const ok = await confirmDialog({
+      title: `Delete profile ${p.name}`,
+      lead: 'Removes the profile only. No skill folder is touched, in global or in any project.',
+      confirmLabel: 'Delete profile',
+      danger: true,
+      preview: async () => ({ lines: [{ text: `remove profile ${p.name} (${p.skills.length} ${p.skills.length === 1 ? 'skill' : 'skills'}) from ${state.profiles && state.profiles.file ? shortPath(state.profiles.file) : 'profiles.json'}` }] }),
+    });
+    if (!ok || !(await profileOp({ op: 'delete', name: p.name }))) return;
+    toast(`Deleted profile ${p.name}.`, 'info', {
+      label: 'Undo',
+      run: async () => { if (await profileOp({ op: 'create', name: p.name, skills: p.skills })) { toast(`Restored profile ${p.name}.`); render(); } },
+    });
+    render();
+  }
+
+  const APPLY_STATUS = { copied: { label: 'Copied', tone: 'accent', cls: 'ok' }, skipped: { label: 'Skipped', tone: 'plain', cls: 'muted' }, missing: { label: 'Missing', tone: 'warn', cls: 'muted' }, failed: { label: 'Failed', tone: 'bad', cls: 'bad' } };
+  const applyNote = (r) => (r.status === 'copied' ? `Into .${r.target}/skills.` : r.status === 'skipped' ? `${r.reason[0].toUpperCase()}${r.reason.slice(1)}.` : r.status === 'missing' ? 'No global skill with this name.' : `${r.error || 'Unknown error.'}${r.code ? ` (${r.code})` : ''}`);
+
+  function applyPreview(res) {
+    const results = res.results || [];
+    const lines = results.map((r) => ({ text: `${r.name}: ${r.status === 'copied' ? `will be copied into .${r.target}/skills` : r.status === 'skipped' ? `skipped, ${r.reason}` : r.status === 'missing' ? 'missing from global, not copied' : r.error || 'will fail'}`, error: r.status === 'failed' }));
+    if ((res.changes || []).length) {
+      lines.push({ text: 'Changes', group: true });
+      res.changes.forEach((c) => lines.push({ text: c }));
+    }
+    return { lines, blocked: !results.some((r) => r.status === 'copied') };
+  }
+
+  /** Apply a profile to a project (`proj`: { name, root? }; no root = the current project). `fixed` skips the profile picker. */
+  async function applyProfile(proj, fixed) {
+    if (!state.profiles) await loadProfiles();
+    const all = state.profiles ? state.profiles.profiles : [];
+    if (!all.length) { toast('There are no profiles yet. Create one in the Profiles tab.', 'error'); return; }
+    const base = { action: 'applyProfile', ...(proj.root ? { projectRoot: proj.root } : {}) };
+    const options = fixed ? [] : [{ type: 'select', name: 'profile', label: 'Profile', choices: all.map((p) => ({ value: p.name, label: `${p.name} (${p.skills.length} ${p.skills.length === 1 ? 'skill' : 'skills'})` })) }];
+    options.push(
+      { type: 'radio', name: 'target', value: 'claude', label: 'Into .claude/skills', hint: 'Visible to Claude in this project.', checked: true },
+      { type: 'radio', name: 'target', value: 'agents', label: 'Into .agents/skills', hint: 'Shared with other agents in this project.' },
+      { type: 'checkbox', name: 'overwrite', label: 'Overwrite skills already in the project', hint: 'Without this they are skipped. A replaced copy goes to the system Trash.', checked: false });
+    const payload = (v) => ({ ...base, profile: fixed || v.profile, target: v.target, overwrite: !!v.overwrite });
+    const values = await confirmDialog({
+      title: fixed ? `Apply ${fixed} to ${proj.name}` : `Apply a profile to ${proj.name}`,
+      lead: 'Copies every skill of the profile into the project. Skills already there are skipped, and names missing from global are reported. Inactive global skills are copied and stay inactive in global.',
+      confirmLabel: 'Apply',
+      options,
+      preview: async (v) => {
+        try { return applyPreview(await batchCall({ ...payload(v), dryRun: true })); } catch (e) { return { error: e.message }; }
+      },
+    });
+    if (!values) return;
+    let res = null;
+    try {
+      res = await batchCall(payload(values));
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+    if (res) showApplyResults(res, fixed || values.profile, proj.name);
+    await refresh();
+  }
+
+  function showApplyResults(res, profile, projectName) {
+    const results = res.results || [];
+    const n = (st) => results.filter((r) => r.status === st).length;
+    const copied = n('copied');
+    toast(`${profile}: copied ${copied} of ${results.length} into ${projectName}.`, n('failed') ? 'error' : 'info');
+    const dlg = $('#results');
+    const close = h('button', { class: 'btn primary', type: 'submit', text: 'Close', value: 'close' });
+    const parts = [['skipped', 'skipped'], ['missing', 'missing from global'], ['failed', 'failed']].filter(([st]) => n(st)).map(([st, label]) => `${n(st)} ${label}`);
+    dlg.replaceChildren(h('form', { method: 'dialog' },
+      h('h2', { id: 'results-title', text: `Applied ${profile} to ${projectName}` }),
+      h('p', { class: 'lead', text: `Copied ${copied} ${copied === 1 ? 'skill' : 'skills'}${parts.length ? `; ${parts.join(', ')}` : ''}.` }),
+      h('ul', { class: 'results' }, results.map((r) => {
+        const m = APPLY_STATUS[r.status];
+        return h('li', { class: m.cls },
+          h('span', { class: `badge ${m.tone}`, text: m.label }),
+          h('div', {}, h('strong', { text: r.name }), h('p', { text: applyNote(r) })));
+      })),
+      h('div', { class: 'modal-actions' }, close)));
+    dlg.showModal();
+    close.focus();
+  }
+
   // ---------- multi-select and batch copy ----------
 
   function renderActionBar() {
@@ -1699,6 +1979,7 @@
     state.selected.clear();
     render();
     if (scope === 'projects' && !state.projects && !state.projectsLoading) loadProjects();
+    if (scope === 'profiles' && !state.profiles) loadProfiles();
   }
 
   document.querySelectorAll('.tab').forEach((tab) => {

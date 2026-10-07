@@ -3,6 +3,7 @@ import path from 'node:path';
 import { assertName, resolveContext, SkmError } from './context.mjs';
 import { dirHash, inspect, moveSync } from './fsutil.mjs';
 import { applyIgnoreOp, inactiveIgnoreOp } from './gitignore.mjs';
+import { getProfile } from './profiles.mjs';
 import { locate, scanScope } from './scan.mjs';
 import { trashSync, trashTarget } from './trash.mjs';
 import { updateSkill } from './updates.mjs';
@@ -222,6 +223,47 @@ function copyManyToLocal(ctx, { names, overwrite, target = 'claude', dryRun }) {
   return { ok: done === results.length, message, changes, results };
 }
 
+/**
+ * Copy every skill of a profile into the project through copyManyToLocal. A skill already in the project is skipped
+ * unless `overwrite` (which replaces the copy where it lives); a skill inactive in the project is always skipped.
+ * Inactive global skills are valid sources and stay inactive. Names with no global skill are reported as `missing`.
+ */
+function applyProfile(ctx, { profile, overwrite, target = 'claude', dryRun }) {
+  if (!ctx.project) throw new SkmError('no-project', 'no project detected from the current directory');
+  if (!['agents', 'claude'].includes(target)) throw new SkmError('invalid', `invalid target: ${target}`);
+  const p = getProfile(ctx, profile);
+  const byName = new Map();
+  const groups = { agents: [], claude: [] };
+  for (const name of p.skills) {
+    const l = locate(ctx, 'local', name);
+    if (!l.a && !l.c && (l.ia || l.ic)) byName.set(name, { name, status: 'skipped', reason: 'inactive in this project' });
+    else if ((l.a || l.c) && !overwrite) byName.set(name, { name, status: 'skipped', reason: 'already in this project' });
+    else {
+      // Overwrite replaces the real folder where it lives, so a skill never ends up in both roots by accident.
+      const dir = (x) => x?.kind === 'dir';
+      const where = !l.a && !l.c ? target : dir(l[target === 'agents' ? 'a' : 'c']) ? target : dir(l.a) ? 'agents' : dir(l.c) ? 'claude' : target;
+      groups[where].push(name);
+    }
+  }
+  const changes = [];
+  for (const where of ['claude', 'agents']) {
+    if (!groups[where].length) continue;
+    const batch = copyManyToLocal(ctx, { names: groups[where], overwrite, target: where, dryRun });
+    changes.push(...batch.changes);
+    for (const r of batch.results) {
+      if (r.ok) byName.set(r.name, { name: r.name, status: 'copied', target: where });
+      else if (r.code === 'not-found') byName.set(r.name, { name: r.name, status: 'missing', error: r.error });
+      else byName.set(r.name, { name: r.name, status: 'failed', error: r.error, code: r.code });
+    }
+  }
+  const results = p.skills.map((n) => byName.get(n));
+  const pick = (st) => results.filter((r) => r.status === st).map((r) => r.name);
+  const [copied, skipped, missing, failed] = ['copied', 'skipped', 'missing', 'failed'].map(pick);
+  const parts = [`copied ${copied.length}`, skipped.length && `skipped ${skipped.length}`, missing.length && `${missing.length} missing from global`, failed.length && `${failed.length} failed`];
+  const message = `${dryRun ? 'dry run: ' : ''}applied profile ${p.name} to ${ctx.project.name}: ${parts.filter(Boolean).join(', ')}`;
+  return { ok: !failed.length, message, changes, results, copied, skipped, missing, failed };
+}
+
 function del(ctx, { scope, name, dryRun }) {
   const l = locate(ctx, scope, name);
   const all = [l.a, l.c, l.ia, l.ic].filter(Boolean);
@@ -239,7 +281,7 @@ function del(ctx, { scope, name, dryRun }) {
 
 // ---- entry points --------------------------------------------------------
 
-export const ACTIONS = ['activate', 'deactivate', 'normalize', 'promote', 'copyToLocal', 'delete', 'update'];
+export const ACTIONS = ['activate', 'deactivate', 'normalize', 'promote', 'copyToLocal', 'delete', 'update', 'applyProfile'];
 
 /** Run one action. Throws SkmError on failure; returns { ok, message, changes }. */
 export function runAction(opts, req) {
@@ -249,6 +291,7 @@ export function runAction(opts, req) {
     requireScope(scope ?? 'global', ['global']);
     return copyManyToLocal(ctx, { names: req.names, overwrite, target, dryRun });
   }
+  if (action === 'applyProfile') return applyProfile(ctx, { profile: req.profile, overwrite, target, dryRun });
   const name = assertName(req?.name);
   switch (action) {
     case 'activate':
