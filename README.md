@@ -79,8 +79,9 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - open the **Projects** tab to browse your projects (what they are, their stack, tags and status) and their skills;
 - switch the **theme** (System, Light or Dark) with the toggle in the top right corner; your choice is remembered in the browser;
 - mark skills as **favorites**, add **tags**, filter by them, and copy several skills into the project at once;
-- keep **profiles** (named skill kits) in the **Profiles** tab and **Apply** one to a project in one step.
-- open **Instructions** on a project card to see its `CLAUDE.md` / `AGENTS.md` files, which are links or plain copies, and a diff of any two (read only).
+- keep **profiles** (named skill kits) in the **Profiles** tab and **Apply** one to a project in one step;
+- open **Instructions** on a project card to see its `CLAUDE.md` / `AGENTS.md` files, which are links or plain copies, and a diff of any two (read only);
+- open the **Health** tab for broken links, missing sources, forgotten inactive folders and diverged copies, each with a fix button.
 
 ![skm in dark mode](docs/img/screenshot-dark.png)
 
@@ -119,6 +120,7 @@ skm projects set <name|path>   [--desc "..."] [--tags a,b] [--add-tag t] [--rm-t
 skm projects add <path>   |   skm projects rm <path>   |   skm projects depth <n>
 skm config                # show the config file path and content
 skm profile list|show|save|apply|rm   # named skill kits (skm profile --help)
+skm check                 [--json] [--global|--local|--projects]   # health check with fixes; exit 1 on errors
 skm instructions [name|path]   [--json]   # CLAUDE.md / AGENTS.md files of a project and the global one (read only)
 skm instructions diff <a> <b>  [--project <name|path>] [--json]   # diff two of them (global = ~/.claude/CLAUDE.md)
 ```
@@ -255,6 +257,22 @@ match the folder or is not a valid name, a missing, very short or very long desc
 characters), a description that never says when to use the skill, broken references to files in the
 folder, and very large files. Findings are `error`, `warn` or `info`; `skm lint` exits with 1 if there is
 any error, so you can use it in a script.
+
+## Health check
+
+`skm check` (and the **Health** tab in the UI) looks for what is broken or forgotten, and suggests a fix for each finding:
+
+| Finding | Severity | Suggested fix |
+| --- | --- | --- |
+| `broken-link`: a symlink in a skills folder points at nothing | error | `normalize` (global claude link next to a real agents folder) or `delete` (only unlinks) |
+| `missing-source`: an active skill whose links all point at nothing, or whose folder has no `SKILL.md` | error | `delete`, or add a `SKILL.md` |
+| `forgotten-inactive`: an inactive folder that is empty, or that nothing refers to (no profile, favorite, tag or source) and is unchanged for 180 days | hint | `activate` or `delete` |
+| `diverged`: the same name with different content (a project copy vs global, the `.agents` vs `.claude` copies, or several projects with no global copy) | hint | `refresh` (update local from global), `promote --overwrite` (keep local), `normalize --keep agents\|claude` |
+
+By default it checks global and the current project; `--global`, `--local` or `--projects` (global and every scanned
+project) narrow or widen it. It exits with 1 when there is an error. Fixes are the usual actions, so they show what
+would change first and move folders to the system Trash instead of deleting them. Similar descriptions competing for
+activation are not checked (yet).
 
 ## Projects
 

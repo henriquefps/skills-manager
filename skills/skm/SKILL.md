@@ -48,6 +48,7 @@ An ignored folder is not scanned at all, unlike archived. If a project is missin
 | --- | --- |
 | `skm list [--json]` | global and current-project skills with status, tokens, tags |
 | `skm doctor` | layout problems with the suggested fix |
+| `skm check [--json] [--projects]` | health check: broken links, missing sources (errors), forgotten inactive folders, diverged same-name copies (hints); exit 1 on errors |
 | `skm cost` | context cost (estimated tokens) of the active skills |
 | `skm lint [name]` | check SKILL.md content; exit 1 on errors |
 | `skm outdated` | check tracked skills against their GitHub source |
@@ -64,6 +65,12 @@ An ignored folder is not scanned at all, unlike archived. If a project is missin
 When the user starts a new project or asks to set it up "like" another one, run `skm profile list` and suggest a
 matching profile; apply it from inside the project, with `--dry-run` first. `--overwrite` replaces existing project
 skills (old copies go to the system Trash): only with the user's agreement.
+
+When a skill does not load or the user asks what is wrong with their skills, run `skm check --json`. Each finding has
+`type`, `severity` (`error` or `hint`), `message`, `paths` and `fixes` (`{ label, request: { action, scope, name, ... } }`);
+the text output prints the matching `skm` command for each fix. Show the findings, propose the fix, run it with
+`--dry-run` first and only then for real, with the user's agreement (deleted folders go to the system Trash). Hints are
+advisory: an old inactive skill may be kept on purpose.
 
 ## Instruction files (CLAUDE.md / AGENTS.md)
 

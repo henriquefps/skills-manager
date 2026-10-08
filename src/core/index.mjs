@@ -16,3 +16,4 @@ export { projectMetaFor, readProjectMeta, writeProjectMeta, STATUSES } from './p
 export { projectDescription, projectStatus, searchProjects } from './projectsearch.mjs';
 export { compileIgnore, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, updateIgnore, MAX_IGNORE } from './ignore.mjs';
 export { deleteProfile, getProfile, normalizeProfileName, profilesPath, projectSkillNames, readProfiles, saveProfile, saveProjectProfile, updateProfile } from './profiles.mjs';
+export { checkHealth, HEALTH_SCOPES, OLD_DAYS } from './health.mjs';

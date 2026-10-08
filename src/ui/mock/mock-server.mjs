@@ -5,6 +5,8 @@
 // five extra mock projects until removed (POST /api/project-ignore keeps the list in memory). Two profiles are seeded
 // (GET/POST /api/profiles and the applyProfile action keep them in memory). GET /api/instructions(/diff) answer from
 // seeded instruction files: atlas has a CLAUDE.md and AGENTS.md that differ, ledger a symlink, pixel-site a plain copy.
+// GET /api/health runs the same rules as src/core/health.mjs over the in-memory skills, so its fixes change what the
+// next check finds.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
@@ -71,6 +73,8 @@ function seed() {
     mk('global', 'capacitor-app-checklist', 'diverged', 'Checklist of recurring platform-level concerns for Capacitor mobile apps.', { issues: ['agents and claude copies differ (2 files changed)'], locations: [gAgents('capacitor-app-checklist'), loc('claude', `${HOME}/.claude/skills/capacitor-app-checklist`)] }),
     mk('global', 'cordova-plugins', 'claude-only', 'Guideline for building, optimizing and debugging hybrid mobile Cordova and Capacitor native plugins.', { issues: ['Only exists in ~/.claude/skills, not in the agents store'], locations: [loc('claude', `${HOME}/.claude/skills/cordova-plugins`)] }),
     mk('global', 'react-agent-builder', 'broken-link', '', { issues: ['Symlink target does not exist'], locations: [loc('claude', `${HOME}/.claude/skills/react-agent-builder`, 'broken-symlink', '../../.agents/skills/react-agent-builder')], files: 0, bytes: 0 }),
+    mk('global', 'figma-export', 'broken-link', 'Export frames and components from Figma files to PNG and SVG. Use when handing off designs.', { issues: ['claude entry is a broken symlink -> ../../old-skills/figma-export'], locations: [gAgents('figma-export'), loc('claude', `${HOME}/.claude/skills/figma-export`, 'broken-symlink', '../../old-skills/figma-export')] }),
+    mk('global', 'old-prompts', 'empty', '', { active: false, issues: ['Folder has no SKILL.md'], locations: [loc('agents', `${HOME}/.agents/skills-inactive/old-prompts`)], files: 0, bytes: 0, mtime: '2025-02-11T09:00:00.000Z' }),
     mk('global', 'outsystems-ui-js', 'wrong-link', 'Create pure js components for outsystems apps.', { issues: ['Claude link points to ~/old-skills/outsystems-ui-js'], locations: [gAgents('outsystems-ui-js'), loc('claude', `${HOME}/.claude/skills/outsystems-ui-js`, 'symlink', '../../old-skills/outsystems-ui-js')] }),
     mk('global', 'scratch-notes', 'empty', '', { issues: ['Folder has no SKILL.md'], locations: [gAgents('scratch-notes'), gLink('scratch-notes')], files: 0, bytes: 0 }),
     mk('global', 'build-a-saas', 'conflict', 'Blueprint and execution guideline for planning and building a lightweight SaaS.', { issues: ['2 Syncthing conflict files: SKILL.sync-conflict-20260901.md'], locations: [gAgents('build-a-saas'), gLink('build-a-saas')], files: 5 }),
@@ -79,7 +83,7 @@ function seed() {
     mk('local', 'atlas-conventions', 'ok', 'Naming, folder layout and review rules for the Atlas monorepo.', { locations: [loc('claude', `${ROOT}/.claude/skills/atlas-conventions`)] }),
     mk('local', 'release-checklist', 'ok', 'Steps for cutting an Atlas release, from changelog to tag and deploy.', { locations: [loc('agents', `${ROOT}/.agents/skills/release-checklist`), loc('claude', `${ROOT}/.claude/skills/release-checklist`)] }),
     mk('local', 'wrangler', 'diverged', 'Cloudflare Workers CLI, pinned to the Atlas account setup.', { vsGlobal: 'diverged', issues: ['Contents differ between agents and claude copies'], locations: [loc('agents', `${ROOT}/.agents/skills/wrangler`), loc('claude', `${ROOT}/.claude/skills/wrangler`)] }),
-    mk('local', 'db-migrations', 'ok', 'Write and verify SQL migrations for the Atlas Postgres schema.', { active: false, locations: [loc('claude', `${ROOT}/.claude/skills-inactive/db-migrations`)] }),
+    mk('local', 'db-migrations', 'ok', 'Write and verify SQL migrations for the Atlas Postgres schema.', { active: false, mtime: '2025-11-02T09:00:00.000Z', locations: [loc('claude', `${ROOT}/.claude/skills-inactive/db-migrations`)] }),
     mk('local', 'half-written', 'empty', '', { issues: ['Folder has no SKILL.md'], locations: [loc('claude', `${ROOT}/.claude/skills/half-written`)], files: 0, bytes: 0 }),
   ];
   const org = (name, source, installedAt, modified = false, status = 'up-to-date', extra = {}) => {
@@ -356,7 +360,10 @@ function act(d, b) {
       if (s.active === on) return err('noop', `${b.name} is already ${on ? 'active' : 'inactive'}.`);
       const changes = [`move ${s.name} ${on ? 'from skills-inactive' : 'to skills-inactive'}`];
       if (g) changes.push(on ? `symlink ~/.claude/skills/${s.name} -> ../../.agents/skills/${s.name}` : `remove ~/.claude/skills/${s.name}`);
-      if (!b.dryRun) s.active = on;
+      if (!b.dryRun) {
+        s.active = on;
+        s.locations = s.locations.map((l) => ({ ...l, path: on ? l.path.replace('/skills-inactive/', '/skills/') : l.path.replace('/skills/', '/skills-inactive/') }));
+      }
       return { body: { ok: true, message: `${on ? 'Activated' : 'Deactivated'} ${s.name}.`, changes } };
     }
     case 'normalize': {
@@ -378,7 +385,7 @@ function act(d, b) {
       const changes = map[s.status];
       if (!changes) return err('not-fixable', `${s.name} (${s.status}) cannot be normalized automatically.`, 422);
       if (!b.dryRun) {
-        Object.assign(s, { status: s.status === 'broken-link' ? 'empty' : 'ok', issues: [], locations: [gAgents(s.name), gLink(s.name)] });
+        Object.assign(s, { status: s.status === 'broken-link' && !s.locations.some((x) => x.kind === 'dir') ? 'empty' : 'ok', issues: [], locations: [gAgents(s.name), gLink(s.name)] });
         if (s.status === 'empty') s.issues = ['Folder has no SKILL.md'];
       }
       return { body: { ok: true, message: `Normalized ${s.name}.`, changes } };
@@ -446,6 +453,70 @@ function act(d, b) {
     default:
       return err('bad-action', `Unknown action ${b.action}.`, 400);
   }
+}
+
+// ---- /api/health (same rules as src/core/health.mjs) ----
+const DAY = 86400000;
+function healthFindings(s, project) {
+  const out = [];
+  const req = (action, extra = {}) => ({ action, scope: s.scope, name: s.name, ...(project ? { projectRoot: project.root } : {}), ...extra });
+  const f = (type, severity, message, more = {}) => ({ id: [type, more.kind || '', s.scope, project ? project.root : '', s.name].join(':'), type, severity, scope: s.scope, name: s.name, project, message, paths: [], fixes: [], manual: null, ...more });
+  const isInactive = (l) => l.inactive || /skills-inactive/.test(l.path);
+  const broken = s.locations.filter((l) => l.kind === 'broken-symlink');
+  const working = s.locations.filter((l) => l.kind !== 'broken-symlink');
+  const del = (label) => ({ label, request: req('delete') });
+  const links = broken.map((l) => `${l.path} -> ${l.target}`).join(', ');
+  if (s.active && !working.some((l) => !isInactive(l))) {
+    out.push(f('missing-source', 'error', `active, but its source is missing: ${links}`, { kind: 'link', paths: broken.map((l) => l.path), fixes: [del('Remove the link')] }));
+  } else {
+    if (s.active && s.files === 0) out.push(f('missing-source', 'error', 'active, but its folder has no SKILL.md', { kind: 'skill-md', paths: working.map((l) => l.path), fixes: [del('Delete')], manual: 'or add a SKILL.md to the folder' }));
+    if (broken.length) out.push(f('broken-link', 'error', `link points at nothing: ${links}`, { paths: broken.map((l) => l.path), fixes: s.scope === 'global' && working.some((l) => l.root === 'agents') ? [{ label: 'Relink to the agents folder', request: req('normalize') }] : [del('Remove the link')] }));
+  }
+  if (!s.active && working.length) {
+    const m = metaOf(s.name);
+    const empty = s.files === 0;
+    const days = Math.floor((Date.now() - new Date(s.mtime).getTime()) / DAY);
+    const old = days > 180;
+    const unref = !profileList().some((p) => p.skills.includes(s.name)) && !m.favorite && !m.tags.length && !s.origin;
+    if (empty || (old && unref)) {
+      const reasons = [empty && 'empty', unref && 'unreferenced', old && 'old'].filter(Boolean);
+      const why = { empty: 'empty', unreferenced: 'no profile, favorite, tag or source refers to it', old: `unchanged for ${days} days` };
+      out.push(f('forgotten-inactive', 'hint', `inactive folder looks forgotten: ${reasons.map((r) => why[r]).join('; ')}`, { reasons, paths: working.map((l) => l.path), fixes: [...(empty ? [] : [{ label: 'Activate', request: req('activate') }]), del('Delete')] }));
+    }
+  }
+  if (s.status === 'diverged') {
+    const fixes = s.scope === 'global' ? [{ label: 'Keep the agents copy', request: req('normalize', { keep: 'agents' }) }, { label: 'Keep the claude copy', request: req('normalize', { keep: 'claude' }) }] : [];
+    out.push(f('diverged', 'hint', `copies in ${s.scope === 'global' ? '~/.agents/skills and ~/.claude/skills' : '.agents/skills and .claude/skills'} have different content`, { kind: 'copies', paths: working.map((l) => l.path), fixes, manual: fixes.length ? null : 'keep one copy: compare both folders and remove the other one' }));
+  }
+  if (s.scope === 'local' && vsGlobalOf(s) === 'diverged') {
+    out.push(f('diverged', 'hint', 'differs from the global skill of the same name', { kind: 'vs-global', paths: working.map((l) => l.path), fixes: [{ label: 'Update local from global', request: req('refresh') }, { label: 'Keep local: promote over global', request: req('promote', { overwrite: true }) }] }));
+  }
+  return out;
+}
+function healthPayload(scope) {
+  if (scope && !['global', 'local', 'projects'].includes(scope)) return { status: 400, body: { ok: false, error: `invalid scope: ${scope} (global, local or projects)`, code: 'invalid' } };
+  if (scope === 'local' && noProject) return { status: 400, body: { ok: false, error: 'no project detected from the current directory', code: 'no-project' } };
+  const findings = [];
+  const checked = { global: scope !== 'local', projects: [] };
+  if (checked.global) for (const s of db.global) findings.push(...healthFindings(s, null));
+  const projects = [];
+  if (!noProject && scope !== 'global') projects.push({ root: ROOT, name: 'atlas', list: db.local });
+  if (scope === 'projects') projects.push(...visibleProjects().filter((p) => p.root !== ROOT));
+  for (const p of projects) {
+    checked.projects.push({ root: p.root, name: p.name });
+    for (const s of p.list) findings.push(...healthFindings(s, { root: p.root, name: p.name }));
+  }
+  if (scope === 'projects') {
+    for (const r of projectsPayload().repeated) {
+      if (r.identical || r.inGlobal) continue;
+      findings.push({ id: `diverged:across-projects:local::${r.name}`, type: 'diverged', kind: 'across-projects', severity: 'hint', scope: 'local', name: r.name, project: null,
+        message: `different copies in ${r.projects.length} projects and none in global`, paths: r.projects, fixes: [], manual: `promote the copy to keep (cd <project> && skm promote ${r.name}), then update the others from global` });
+    }
+  }
+  const rank = (x) => [x.severity === 'error' ? 0 : 1, x.scope === 'global' ? 0 : 1, x.project ? x.project.root : '', x.name, x.type].join('\0');
+  findings.sort((a, b) => (rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0));
+  const counts = { error: findings.filter((x) => x.severity === 'error').length, hint: findings.filter((x) => x.severity === 'hint').length };
+  return { body: { scope: scope || null, checked, findings, counts } };
 }
 
 // ---- /api/diff ----
@@ -682,6 +753,11 @@ createServer(async (req, res) => {
     if (url.pathname === '/api/projects') {
       await new Promise((r) => setTimeout(r, 400));
       return send(res, 200, projectsPayload());
+    }
+    if (url.pathname === '/api/health') {
+      await new Promise((r) => setTimeout(r, 300));
+      const out = healthPayload(url.searchParams.get('scope') || '');
+      return send(res, out.status || 200, out.body);
     }
     if (url.pathname === '/api/updates') {
       await new Promise((r) => setTimeout(r, Number(process.env.MOCK_CHECK_MS || 1200)));
