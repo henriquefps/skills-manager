@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { diffInstructions, listInstructions } from './core/instructions.mjs';
 import { checkHealth, checkUpdates, deleteProfile, diffLocal, diffUpstream, getSkill, getState, profilesPath, projectContext, readConfig, readProfiles, resolveContext, runAction, saveProfile, saveProjectProfile, scanProjects, searchProjects, SkmError, updateIgnore, updateMeta, updateProfile, updateProjectMeta, writeConfig } from './core/index.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
@@ -142,6 +143,18 @@ export function createServer(opts = {}) {
       if (url.pathname === '/api/profiles' && req.method === 'POST') {
         refuseCrossOrigin(req);
         return sendJson(res, 200, profileOp(ctx, await readJson(req)));
+      }
+
+      // instruction files (CLAUDE.md / AGENTS.md), read only
+      if (url.pathname === '/api/instructions' && req.method === 'GET') {
+        const root = url.searchParams.get('projectRoot');
+        const pctx = root ? projectContext(ctx, root) : ctx;
+        return sendJson(res, 200, listInstructions(pctx));
+      }
+      if (url.pathname === '/api/instructions/diff' && req.method === 'GET') {
+        const root = url.searchParams.get('projectRoot');
+        const pctx = root ? projectContext(ctx, root) : ctx;
+        return sendJson(res, 200, diffInstructions(pctx, url.searchParams.get('a'), url.searchParams.get('b')));
       }
 
       if (url.pathname === '/api/skill' && req.method === 'GET') {

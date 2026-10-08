@@ -3,12 +3,15 @@
 // MOCK_ROOTS=1 to start with scan roots configured, MOCK_PM_FORBIDDEN=1 to make every
 // POST /api/project-meta answer with the `forbidden` error). Four ignore entries are seeded; they hide
 // five extra mock projects until removed (POST /api/project-ignore keeps the list in memory). Two profiles are seeded
-// (GET/POST /api/profiles and the applyProfile action keep them in memory). GET /api/health runs the same rules
-// as src/core/health.mjs over the in-memory skills, so its fixes change what the next check finds.
+// (GET/POST /api/profiles and the applyProfile action keep them in memory). GET /api/instructions(/diff) answer from
+// seeded instruction files: atlas has a CLAUDE.md and AGENTS.md that differ, ledger a symlink, pixel-site a plain copy.
+// GET /api/health runs the same rules as src/core/health.mjs over the in-memory skills, so its fixes change what the
+// next check finds.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { diffLines } from '../../core/diff.mjs';
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 4748);
@@ -551,6 +554,79 @@ function localDiffFor(name) {
   return { name, from: 'local', to: 'global', stats: { added: 0, removed: 1, modified: 1, insertions: 4, deletions: 4 }, files };
 }
 
+// ---- instruction files (read only, same shapes as the real API) ----
+const IGLOBAL = '# Global rules\n\n- Answer in English.\n- Never push without asking.\n- Prefer small commits.\n';
+const ATLAS_CLAUDE = '# Atlas\n\nMonorepo for the Atlas dashboard.\n\n## Commands\n\n- `pnpm dev` starts web and API.\n- `pnpm test` runs every package.\n\n## Rules\n\n- Keep packages/shared free of React.\n- Migrations live in packages/db.\n- Release branches are cut on Thursdays.\n';
+const ATLAS_AGENTS = '# Atlas\n\nMonorepo for the Atlas dashboard.\n\n## Commands\n\n- `npm run dev` starts web and API.\n- `pnpm test` runs every package.\n\n## Rules\n\n- Keep packages/shared free of React.\n- Migrations live in packages/db.\n';
+const LEDGER = '# Ledger\n\nPython 3.12, managed with uv.\n\n- `uv run pytest` before every commit.\n';
+const PIXEL = '# Pixel site\n\nVite + Tailwind. Deploys on Cloudflare Pages from main.\n';
+// root -> id -> { text } or { link: id, target }
+const INSTR = {
+  [ROOT]: { 'CLAUDE.md': { text: ATLAS_CLAUDE }, 'AGENTS.md': { text: ATLAS_AGENTS }, 'CLAUDE.local.md': { text: '# Mine\n\n- Use the staging database.\n' } },
+  '/Users/demo/code/ledger': { 'CLAUDE.md': { text: LEDGER }, 'AGENTS.md': { link: 'CLAUDE.md', target: 'CLAUDE.md' } },
+  '/Users/demo/code/pixel-site': { 'CLAUDE.md': { text: PIXEL }, 'AGENTS.md': { text: PIXEL }, '.claude/CLAUDE.md': { link: 'global', target: `${HOME}/.claude/CLAUDE.md` } },
+};
+const INSTR_IDS = ['CLAUDE.md', 'AGENTS.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'];
+const iname = (id) => (id === 'global' ? '~/.claude/CLAUDE.md' : id);
+function instrFiles(root) {
+  const set = INSTR[root] || {};
+  const real = (id) => (id === 'global' ? 'global' : set[id].link ? real(set[id].link) : id);
+  const textOf = (id) => (real(id) === 'global' ? IGLOBAL : set[real(id)].text);
+  const one = (id, scope, path) => {
+    const t = textOf(id);
+    const e = id === 'global' ? {} : set[id];
+    return { id, scope, path, kind: e.link ? 'symlink' : 'file', ...(e.link ? { target: e.target, real: real(id), linksTo: e.link } : { real: id }), bytes: t.length, lines: t.split('\n').length - 1, tokens: Math.ceil(t.length / 4), mtime: '2026-10-01T09:00:00.000Z', text: t };
+  };
+  return { files: INSTR_IDS.filter((id) => set[id]).map((id) => one(id, 'project', `${root}/${id}`)), global: one('global', 'global', `${HOME}/.claude/CLAUDE.md`) };
+}
+const clean = ({ text, real, ...f }) => f;
+function instructionsFor(root) {
+  const { files, global } = instrFiles(root);
+  const all = [...files, global];
+  const pairs = [];
+  const findings = [];
+  const heads = [];
+  for (const f of all) {
+    const head = heads.find((x) => x.real === f.real);
+    if (head) pairs.push({ a: head.id, b: f.id, relation: 'link' });
+    else heads.push(f);
+  }
+  const shared = new Set(['CLAUDE.md', 'AGENTS.md', '.claude/CLAUDE.md']);
+  // Plain copies are one content too: a copy is reported once and only the first of them is compared with the rest.
+  const contents = [];
+  for (const b of heads) {
+    const a = contents.find((a) => a.text === b.text);
+    if (a) {
+      pairs.push({ a: a.id, b: b.id, relation: 'identical' });
+      findings.push({ kind: 'copy', files: [a.id, b.id], message: `${iname(b.id === 'global' ? a.id : b.id)} is a plain copy of ${iname(b.id === 'global' ? b.id : a.id)}: a symlink would keep them in sync` });
+      continue;
+    }
+    for (const a of contents) {
+      pairs.push({ a: a.id, b: b.id, relation: 'differs' });
+      if (shared.has(a.id) && shared.has(b.id)) findings.push({ kind: 'differs', files: [a.id, b.id], message: `${iname(a.id)} and ${iname(b.id)} differ` });
+    }
+    contents.push(b);
+  }
+  return { project: { root, name: root.split('/').pop() }, files: files.map(clean), global: clean(global), pairs, findings };
+}
+function instructionsDiff(root, a, b) {
+  const { files, global } = instrFiles(root);
+  const by = (id) => [...files, global].find((f) => f.id === (id === '~/.claude/CLAUDE.md' ? 'global' : id));
+  const x = by(a);
+  const y = by(b);
+  if (!x || !y) return { status: 404, body: { ok: false, error: `${iname(!x ? a : b)} does not exist`, code: 'not-found' } };
+  if (x.id === y.id) return { status: 400, body: { ok: false, error: 'pick two different instruction files', code: 'invalid' } };
+  const relation = x.real === y.real ? 'link' : x.text === y.text ? 'identical' : 'differs';
+  const stats = { added: 0, removed: 0, modified: 0, insertions: 0, deletions: 0 };
+  const out = [];
+  if (relation === 'differs') {
+    const d = diffLines(x.text, y.text);
+    Object.assign(stats, { modified: 1, insertions: d.insertions, deletions: d.deletions });
+    out.push({ path: `${iname(x.id)} -> ${iname(y.id)}`, status: 'modified', binary: false, hunks: d.hunks });
+  }
+  return { status: 200, body: { a: { id: x.id, path: x.path }, b: { id: y.id, path: y.path }, project: { root, name: root.split('/').pop() }, relation, stats, files: out } };
+}
+
 // ---- profiles (in memory, same shapes as the real API) ----
 const PROFILE_SEED = {
   'capacitor-react-shadcn': ['capacitor-app-checklist', 'cordova-plugins', 'hfps-visuals', 'shadcn-ui'],
@@ -651,6 +727,15 @@ createServer(async (req, res) => {
       if (r.status === 'removed-upstream') return send(res, 422, { ok: false, error: `${s.name} no longer exists in ${s.origin.source}.`, code: 'removed-upstream' });
       if (r.status === 'unreachable' || process.env.MOCK_DIFF_FAIL) return send(res, 502, { ok: false, error: `Could not reach ${s.origin.source}.`, code: 'network' });
       return send(res, 200, diffFor(s.name));
+    }
+    if (url.pathname === '/api/instructions' || url.pathname === '/api/instructions/diff') {
+      await new Promise((r) => setTimeout(r, 200));
+      const root = url.searchParams.get('projectRoot') || (noProject ? null : ROOT);
+      if (!root) return send(res, 200, { project: null, files: [], global: clean(instrFiles(null).global), pairs: [], findings: [] });
+      if (root !== ROOT && !catalog().some((p) => p.root === root)) return send(res, 404, { ok: false, error: `projectRoot is not an existing directory: ${root}`, code: 'not-found' });
+      if (url.pathname === '/api/instructions') return send(res, 200, instructionsFor(root));
+      const r = instructionsDiff(root, url.searchParams.get('a'), url.searchParams.get('b'));
+      return send(res, r.status, r.body);
     }
     if (url.pathname === '/api/config') {
       if (req.method === 'PUT') {

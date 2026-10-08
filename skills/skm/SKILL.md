@@ -1,6 +1,6 @@
 ---
 name: skm
-description: Use when the user names or describes one of their projects ("that sync plugin I built"), asks where something lives on their machine, or wants to inspect or change which agent skills are active. Resolves projects to paths with the skm CLI.
+description: Use when the user names or describes one of their projects ("that sync plugin I built"), asks where something lives on their machine, or wants to inspect or change which agent skills are active, or asks about a project's CLAUDE.md / AGENTS.md files. Resolves projects to paths with the skm CLI.
 ---
 
 # skm: project index and skills manager
@@ -71,6 +71,17 @@ When a skill does not load or the user asks what is wrong with their skills, run
 the text output prints the matching `skm` command for each fix. Show the findings, propose the fix, run it with
 `--dry-run` first and only then for real, with the user's agreement (deleted folders go to the system Trash). Hints are
 advisory: an old inactive skill may be kept on purpose.
+
+## Instruction files (CLAUDE.md / AGENTS.md)
+
+| Command | Use |
+| --- | --- |
+| `skm instructions [name\|path] [--json]` | which of `CLAUDE.md`, `AGENTS.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` a project has, plus `~/.claude/CLAUDE.md`: links, plain copies, files that differ |
+| `skm instructions diff <a> <b> [--project <name\|path>]` | line diff of two of them (`global` = `~/.claude/CLAUDE.md`) |
+
+Use it before editing a project's instructions, or when the user asks why the agent behaves differently in Claude and
+other agents: two files that differ are the usual cause. A symlink between them is fine. skm does not edit these
+files: change them yourself only when the user asks, and prefer a symlink over a second copy.
 
 Add `--json` for structured output. Commands that delete or replace ask for confirmation; do not pass `--yes` unless
 the user agreed.

@@ -1,6 +1,6 @@
 # Planned: CLAUDE.md / AGENTS.md management
 
-Status: planned, not started.
+Status: Phase 1 shipped (2026-10-07); Phase 2 (editing) planned.
 
 ## Why
 

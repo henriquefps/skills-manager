@@ -730,3 +730,16 @@ body.has-bar .toasts { bottom: 96px; }
 @media (max-width: 720px) {
   .finding .actions { max-width: none; justify-content: flex-start; }
 }
+
+/* instruction files drawer (read only) */
+.irows { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.irow { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; background: var(--sunken); border: 1px solid var(--border); border-radius: 10px; }
+.irow.missing { opacity: 0.65; }
+.irow-main { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.iname { font: 600 13px ui-monospace, "SF Mono", Menlo, monospace; }
+.ipath { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.issues li.ifinding { line-height: 1.9; }
+.issues li.ifinding::before { top: 0.95em; }
+.ifind { margin-left: 6px; height: auto; min-height: 0; padding-block: 0; line-height: 1.6; vertical-align: baseline; }
+.icompare { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.icompare select { height: 34px; min-width: 0; flex: 1 1 160px; }
