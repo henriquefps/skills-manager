@@ -37,6 +37,15 @@ npm link
 
 Check it with `skm --help`.
 
+**Optional: the `skm` skill for your agent.** Lets the agent find your projects by description
+(see [The `skm` skill](#the-skm-skill)):
+
+```sh
+npx skills add henriquefps/skills-manager
+```
+
+Agents can't see shell aliases, so if you install the skill, use `npm link` instead of the alias.
+
 ## How skills are organized
 
 `skm` assumes this convention, and the `normalize` command brings your skills to it.
