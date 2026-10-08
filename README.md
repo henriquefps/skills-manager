@@ -80,6 +80,7 @@ Running `skm` with no arguments starts the server and opens your browser. There 
 - switch the **theme** (System, Light or Dark) with the toggle in the top right corner; your choice is remembered in the browser;
 - mark skills as **favorites**, add **tags**, filter by them, and copy several skills into the project at once;
 - keep **profiles** (named skill kits) in the **Profiles** tab and **Apply** one to a project in one step.
+- open **Instructions** on a project card to see its `CLAUDE.md` / `AGENTS.md` files, which are links or plain copies, and a diff of any two (read only).
 
 ![skm in dark mode](docs/img/screenshot-dark.png)
 
@@ -118,6 +119,8 @@ skm projects set <name|path>   [--desc "..."] [--tags a,b] [--add-tag t] [--rm-t
 skm projects add <path>   |   skm projects rm <path>   |   skm projects depth <n>
 skm config                # show the config file path and content
 skm profile list|show|save|apply|rm   # named skill kits (skm profile --help)
+skm instructions [name|path]   [--json]   # CLAUDE.md / AGENTS.md files of a project and the global one (read only)
+skm instructions diff <a> <b>  [--project <name|path>] [--json]   # diff two of them (global = ~/.claude/CLAUDE.md)
 ```
 
 General options: `--yes` (skip confirmation), `--dry-run` (only show what would happen),
@@ -212,6 +215,28 @@ Profiles are stored in `~/.config/skm/profiles.json`, a separate file from the c
 A profile holds skill names only, no versions.
 
 ![skm: profiles](docs/img/screenshot-profiles.png)
+
+## Instruction files (CLAUDE.md / AGENTS.md)
+
+Besides skills, an agent is steered by its instruction files. For each project skm looks at `CLAUDE.md`, `AGENTS.md`,
+`CLAUDE.local.md` and `.claude/CLAUDE.md` at the project root, plus your global `~/.claude/CLAUDE.md`, and tells you:
+
+- which of them exist, with their size in lines and estimated tokens;
+- which one is a **symlink** to another: a valid way to share one file, reported as a link and never flagged;
+- which one is a **plain copy** of another (a symlink would keep them in sync);
+- when two of `CLAUDE.md`, `AGENTS.md` and `.claude/CLAUDE.md` **differ** (`CLAUDE.local.md` and the global file are
+  meant to differ, so only copies of them are flagged).
+
+```sh
+skm instructions                    # the current project (or only the global file outside a project)
+skm instructions atlas --json       # another project, by name or path
+skm instructions diff CLAUDE.md AGENTS.md
+skm instructions diff global CLAUDE.md --project atlas
+```
+
+`skm projects show` lists them too, and in the UI each project card has an **Instructions** button that opens the files,
+the findings and a diff of any two. This is read only: skm never edits, moves or links instruction files (editing is
+planned, see `docs/planned-features/instructions-management.md`). Nested files deeper in the tree are not looked at.
 
 ## Context cost
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { isHomeRelative, isPathLike } from '../src/core/pathkind.mjs';
 import { assertSkillsExist, checkUpdates, configPath, deleteProfile, describeProject, diffLocal, diffUpstream, findProjectRoot, getState, ignoredBy, ignoreKind, normalizeIgnoreEntry, readIgnore, normalizeAll, profilesPath, projectDescription, projectStatus, readConfig, readProfiles, getProfile, resolveContext, runAction, saveProfile, saveProjectProfile, scanProjects, searchProjects, SkmError, statLine, updateIgnore, updateMeta, updateProjectMeta, writeConfig } from '../src/core/index.mjs';
+import { diffInstructions, listInstructions } from '../src/core/instructions.mjs';
 import { startServer } from '../src/server.mjs';
 
 const USAGE = `skm: skills manager
@@ -34,6 +35,9 @@ const USAGE = `skm: skills manager
   skm projects unignore <entry|name|path...>   |   skm projects ignored [--json]   list entries and how many folders each hides
   skm projects add|rm <path>   |   skm projects depth <n>   |   skm config
   skm profile list|show|save|apply|rm   named skill kits (skm profile --help)
+  skm instructions [name|path] [--json]   CLAUDE.md, AGENTS.md, CLAUDE.local.md, .claude/CLAUDE.md of a project
+                   (default: the current one) and ~/.claude/CLAUDE.md: links, plain copies, files that differ
+  skm instructions diff <a> <b> [--project <name|path>] [--json]   line diff of two of them (global = ~/.claude/CLAUDE.md)
 
 Options: --yes (skip confirmation) --dry-run --json --port <n> --no-open
 Env: SKM_HOME overrides the home directory.`;
@@ -53,7 +57,7 @@ const PROFILE_USAGE = `skm profile: named lists of skills (kits) to set up a pro
 
 Profiles are stored in ~/.config/skm/profiles.json.`;
 
-const FLAGS_WITH_VALUE = new Set(['--keep', '--port', '--target', '--tag', '--desc', '--tags', '--add-tag', '--rm-tag', '--status', '--note', '--clear']);
+const FLAGS_WITH_VALUE = new Set(['--project', '--keep', '--port', '--target', '--tag', '--desc', '--tags', '--add-tag', '--rm-tag', '--status', '--note', '--clear']);
 
 export function parseArgs(argv) {
   const out = { _: [], flags: {} };
@@ -198,6 +202,13 @@ async function perform(opts, req, flags, { destructive = false } = {}) {
   report(runAction(opts, { ...req, dryRun }), flags);
 }
 
+function printHunks(hunks) {
+  for (const h of hunks) {
+    console.log(c.magenta(`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`));
+    for (const l of h.lines) console.log(l[0] === '+' ? c.green(l) : l[0] === '-' ? c.red(l) : l);
+  }
+}
+
 /** Colored unified diff of installed -> upstream, or local -> global (`d.from === 'local'`). */
 function printDiff(d) {
   const local = d.from === 'local';
@@ -205,10 +216,7 @@ function printDiff(d) {
   if (!d.files.length) return console.log('no differences');
   for (const f of d.files) {
     console.log(c.bold(`\n${f.status} ${f.path}${f.binary ? ' (binary)' : ''}`));
-    for (const h of f.hunks) {
-      console.log(c.magenta(`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`));
-      for (const l of h.lines) console.log(l[0] === '+' ? c.green(l) : l[0] === '-' ? c.red(l) : l);
-    }
+    printHunks(f.hunks);
   }
   console.log(`\n${statLine(d.stats)}`);
   console.log(c.dim(local ? 'local -> global: your local edits show up as removals' : 'installed -> upstream: your local edits show up as removals'));
@@ -276,10 +284,10 @@ async function resolveProject(ctx, scan, arg) {
   return describeProject(ctx, findProjectRoot(abs, ctx.home) ?? abs);
 }
 
-function printSheet(p) {
+function printSheet(p, instructions) {
   const a = p.auto;
   const active = p.skills.filter((s) => s.active);
-  const row = (k, v) => console.log(`${c.bold(k.padEnd(12))}${v}`);
+  const row = (k, v) => console.log(`${c.bold(k.padEnd(14))}${v}`);
   console.log(c.bold(p.name));
   row('path', p.root);
   row('remote', a.remote ?? '-');
@@ -292,6 +300,9 @@ function printSheet(p) {
   row('notes', p.meta.notes || '-');
   row('skills', !p.skills.length ? 'none' : `${active.length} active${active.length < p.skills.length ? `, ${p.skills.length - active.length} inactive` : ''} (~${active.reduce((n, s) => n + s.cost.listing, 0)} tokens listed)`);
   for (const s of p.skills) console.log(`  ${s.active ? s.name : c.dim(`${s.name} (inactive)`)}  ${c.dim(`${s.cost.listing} tok`)}`);
+  if (!instructions) return;
+  row('instructions', instructions.files.length ? instructions.files.map(instructionLabel).join(', ') : 'none');
+  for (const f of instructions.findings) console.log(`  ${c.yellow(f.message)}`);
 }
 
 const list = (v) => String(v).split(',').map((t) => t.trim()).filter(Boolean);
@@ -401,7 +412,10 @@ async function projectsCommand(opts, [sub, arg, ...more], flags) {
   if (sub === 'ignore') return ignoreCommand(ctx, scan, [arg, ...more].filter((a) => a !== undefined), flags);
   if (sub === 'show' || sub === 'set') {
     const p = await resolveProject(ctx, scan, arg);
-    if (sub === 'show') return flags.json ? console.log(JSON.stringify(p, null, 2)) : printSheet(p);
+    if (sub === 'show') {
+      const instructions = listInstructions(ctx, p.root);
+      return flags.json ? console.log(JSON.stringify({ ...p, instructions }, null, 2)) : printSheet(p, instructions);
+    }
     const meta = updateProjectMeta(ctx, { ...metaRequest(flags), root: p.root });
     if (flags.json) return console.log(JSON.stringify({ ok: true, meta }, null, 2));
     console.log(`updated ${p.name}`);
@@ -438,6 +452,43 @@ async function projectsCommand(opts, [sub, arg, ...more], flags) {
       const kind = r.identical ? c.green('identical') : c.red('diverged');
       console.log(`  ${r.name}  ${kind}${r.inGlobal ? c.dim(' (also global)') : ''}  in ${r.projects.length}: ${r.projects.map((p) => path.basename(p)).join(', ')}`);
     }
+  }
+}
+
+// ---- instruction files (read only) ----------------------------------------
+
+const INSTRUCTION_PAINT = { copy: c.yellow, differs: c.yellow, broken: c.red };
+const instructionName = (id) => (id === 'global' ? '~/.claude/CLAUDE.md' : id);
+const instructionLabel = (f) => (f.linksTo ? `${f.id} -> ${instructionName(f.linksTo)}` : f.kind === 'broken-symlink' ? `${f.id} (broken link)` : f.id);
+
+async function instructionsCommand(opts, [sub, ...rest], flags) {
+  const ctx = resolveContext(opts);
+  const rootOf = async (arg) => (arg ? (await resolveProject(ctx, await scanProjects(ctx), arg)).root : undefined);
+  if (sub === 'diff') {
+    const [a, b] = rest;
+    if (!a || !b) throw new SkmError('invalid', 'usage: skm instructions diff <a> <b> [--project <name|path>]  (files: CLAUDE.md, AGENTS.md, CLAUDE.local.md, .claude/CLAUDE.md, global)');
+    const d = diffInstructions(ctx, a, b, await rootOf(flags.project));
+    if (flags.json) return console.log(JSON.stringify(d, null, 2));
+    console.log(`${c.bold(instructionName(d.a.id))} ${c.dim(d.a.path)} -> ${c.bold(instructionName(d.b.id))} ${c.dim(d.b.path)}`);
+    if (d.relation === 'link') return console.log('same file (one is a symlink to the other)');
+    if (d.relation === 'identical') return console.log('no differences (plain copies)');
+    printHunks(d.files[0].hunks);
+    return console.log(`\n${statLine(d.stats)}`);
+  }
+  const r = listInstructions(ctx, await rootOf(sub));
+  if (flags.json) return console.log(JSON.stringify(r, null, 2));
+  const rows = [['FILE', 'KIND', 'LINES', 'TOK', 'PATH'].map((h) => c.bold(h))];
+  for (const f of [...r.files, r.global]) {
+    const kind = f.linksTo ? `link -> ${instructionName(f.linksTo)}` : f.kind;
+    const missing = f.kind === 'missing' || f.kind === 'broken-symlink';
+    rows.push([instructionName(f.id), missing ? c.dim(kind) : kind, f.lines === undefined ? '-' : String(f.lines), f.tokens === undefined ? '-' : String(f.tokens), f.path]);
+  }
+  console.log(r.project ? `${c.bold(r.project.name)}  ${c.dim(r.project.root)}` : c.dim('no project detected: only the global file is shown (skm instructions <name|path>)'));
+  if (r.project && !r.files.length) console.log(c.dim('no instruction files in this project'));
+  console.log(table(rows));
+  for (const f of r.findings) {
+    const hint = f.files.length === 2 ? c.dim(`  (skm instructions diff ${f.files.join(' ')}${sub ? ` --project ${sub}` : ''})`) : '';
+    console.log(`${(INSTRUCTION_PAINT[f.kind] ?? ((x) => x))(f.message)}${f.kind === 'differs' ? hint : ''}`);
   }
 }
 
@@ -722,6 +773,9 @@ async function main(argv, opts = {}) {
 
     case 'projects':
       return projectsCommand(opts, pos.slice(1), flags);
+
+    case 'instructions':
+      return instructionsCommand(opts, pos.slice(1), flags);
 
     case 'profile':
     case 'profiles':
