@@ -1,6 +1,9 @@
 # Planned: compare global skills across paired computers
 
-Status: planned (2026-11-04). Phase 1 is read only.
+Status: documented only, not started (2026-11-04). Phase 1 is read only.
+
+Decisions (2026-11-04): no per-machine exclusion needed (any paired machine may receive any skill); updates between
+machines go over SSH. Everything else below is a proposal.
 
 ## Why
 
@@ -50,7 +53,9 @@ A paired computer is an entry in `~/.config/skm/config.json`:
   the UI with a matrix (skills as rows, machines as columns, a cell per status) and the diff on click.
 - No writes of any kind on either side.
 
-### Phase 2: bring in line (only if Phase 1 leaves it missing)
+### Phase 2: bring in line over SSH
+
+Decided: updating is done over SSH too (same channel as the comparison).
 
 - "Pull from <machine>" and "Push to <machine>" for one skill, following the existing action model: dry-run first, the
   replaced folder goes to the Trash, plain-text confirmation. Transfer by `ssh` + tar, not a new protocol.
@@ -58,12 +63,12 @@ A paired computer is an entry in `~/.config/skm/config.json`:
 
 ## Open questions
 
-- Skills that must not leave a machine (anything from the company VM): a per-machine `exclude` list, or just leave
-  that machine un-paired?
-- Should `inventory` include skill `lint` or `cost` data, or stay minimal (name, status, hash, active)?
-- Windows remotes use `cmd` by default: is quoting the one `skm inventory` command enough, or does Windows need its
-  own path?
-- Version skew: an older skm on the remote may lack `inventory`. Report "skm too old" with the version, do not guess.
+- Undecided (the user does not know yet): should `inventory` include skill `lint` or `cost` data, or stay minimal
+  (name, status, hash, active)?
+- Undecided: Windows remotes use `cmd` by default. Is quoting the one `skm inventory` command enough, or does Windows
+  need its own path?
+- Undecided: version skew. An older skm on the remote may lack `inventory`; the proposal is to report "skm too old" with
+  the version rather than guess.
 
 ## Out of scope
 
