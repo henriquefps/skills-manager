@@ -61,14 +61,14 @@ Decided: updating is done over SSH too (same channel as the comparison).
   replaced folder goes to the Trash, plain-text confirmation. Transfer by `ssh` + tar, not a new protocol.
 - A diverged skill is never resolved automatically: the user picks the direction, as with `normalize --keep`.
 
-## Open questions
+## Decisions on the former open questions (2026-11-04)
 
-- Undecided (the user does not know yet): should `inventory` include skill `lint` or `cost` data, or stay minimal
-  (name, status, hash, active)?
-- Undecided: Windows remotes use `cmd` by default. Is quoting the one `skm inventory` command enough, or does Windows
-  need its own path?
-- Undecided: version skew. An older skm on the remote may lack `inventory`; the proposal is to report "skm too old" with
-  the version rather than guess.
+- `inventory` returns whatever the comparison needs (name, status, hash, active, and more if a later view wants it). No
+  fixed minimal set to defend.
+- Windows is assumed to need its own handling (`cmd` quoting, paths, junctions). Treat it as a separate task to verify
+  on the real VM when this is built; do not promise Windows support in Phase 1 before testing there.
+- A remote with an old skm is not supported: it must be updated to the new skm first. skm reports "skm too old" with the
+  remote version and does nothing else on that machine.
 
 ## Out of scope
 
