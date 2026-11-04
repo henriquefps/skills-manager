@@ -10,3 +10,4 @@ Shipped features move to [done/](done/); their rows stay in the table and link t
 | [Refresh a local skill from the global copy](done/refresh-local-from-global.md) | shipped |
 | [Broken/orphan skills, duplicates and conflicts](done/health-checks.md) | shipped |
 | [CLAUDE.md / AGENTS.md management](instructions-management.md) | phase 1 shipped |
+| [Compare global skills across paired computers](machine-compare.md) | planned |
